@@ -79,7 +79,22 @@ class MeltypeSession(
                 return true
             }
 
-            // 4. 英字以外の記号や数字が入力された場合
+            // 4. 日本語入力中の句読点・記号（確定させずにバッファに保持して文の入力を継続）
+            if (isComposing && (c == ',' || c == '.' || c == '?' || c == '!' || c == '~')) {
+                val punctuation = when (c) {
+                    ',' -> "、"
+                    '.' -> "。"
+                    '?' -> "？"
+                    '!' -> "！"
+                    '~' -> "〜"
+                    else -> c.toString()
+                }
+                rawBuffer.append(punctuation)
+                updatePreview()
+                return true
+            }
+
+            // 5. 英字以外の記号や数字が入力された場合
             if (isComposing) {
                 // 候補が出ている状態での数字キーは keyPressed 側で選択済み
                 commitCurrent(insertToChat)
@@ -107,8 +122,16 @@ class MeltypeSession(
             if (!isComposing) return false
 
             when (keyCode) {
-                // Space: 変換実行 / 次の候補へ（英語判定なら単語確定＋スペース）
+                // Space: 変換実行 / 次の候補へ（Shift+Space で文中に半角スペース追加）
                 GLFW.GLFW_KEY_SPACE -> {
+                    val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
+                    if (shift) {
+                        // Shift+Space: 変換ではなく半角スペースをバッファに追加（日英混在・長文入力用）
+                        rawBuffer.append(' ')
+                        updatePreview()
+                        return true
+                    }
+
                     // 英語スコアが優勢な場合は、英単語確定＋半角スペースを挿入
                     val eval = scoreEngine.evaluate(rawBuffer.toString(), isFinal = true)
                     if (eval.verdict == Verdict.ENGLISH) {

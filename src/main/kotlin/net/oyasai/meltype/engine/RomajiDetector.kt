@@ -127,7 +127,10 @@ class RomajiDetector {
         while (i < s.length) {
             val c = s[i]
             if (c !in 'a'..'z' && c != '-') {
-                return invalid("英字以外の文字: '$c'")
+                // 空白や句読点・記号はそのままトークンとして保持し、文全体の解析を継続
+                tokens.add(RomajiToken(c.toString(), c.toString()))
+                i += 1
+                continue
             }
 
             // 撥音 'n' の判定: "nn" または 次が子音（y以外）の場合
@@ -183,6 +186,11 @@ class RomajiDetector {
             }
 
             return invalid("ローマ字として無効な並び: '$rest'")
+        }
+
+        val hasKanaTokens = tokens.any { RomajiTable.containsKey(it.romaji) || it.kana == "ん" || it.kana == "っ" }
+        if (!hasKanaTokens) {
+            return invalid("ローマ字トークンなし")
         }
 
         return RomajiAnalysis(

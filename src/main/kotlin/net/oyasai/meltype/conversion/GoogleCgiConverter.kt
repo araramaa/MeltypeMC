@@ -70,30 +70,76 @@ class GoogleCgiConverter(
         }
     }
 
+    private data class Segment(
+        val reading: String,
+        val candidates: List<String>
+    )
+
     /**
-     * Google CGI レスポンス形式: [["ひらがな", ["候補1", "候補2", ...]], ...]
-     * 軽量に正規表現または文字列走査で候補配列を抽出
+     * Google CGI レスポンス形式: [["ひらがな1", ["候補1", "候補2"]], ["ひらがな2", ["候補1", ...]], ...]
+     * 単語単体だけでなく、助詞・助動詞を含む文章全体の複数文節を一括結合して高精度な文候補を生成
      */
     private fun parseGoogleCgiResponse(json: String, original: String): List<String> {
-        val results = mutableListOf<String>()
+        val segments = mutableListOf<Segment>()
         try {
-            // "候補" の文字列を抽出する簡易パーサー
-            val pattern = Pattern.compile("\\[\\\"([^\\\"]+)\\\",\\[([^\\]]+)\\]\\]")
-            val matcher = pattern.matcher(json)
-            if (matcher.find()) {
-                val candidatePart = matcher.group(2)
-                val candMatcher = Pattern.compile("\\\"([^\\\"]+)\\\"")
-                val itemMatcher = candMatcher.matcher(candidatePart)
-                while (itemMatcher.find()) {
-                    results.add(itemMatcher.group(1))
+            // [["読み", ["候補1", "候補2", ...]], ...] の全文節を走査
+            val segmentPattern = Pattern.compile("\\[\\\"([^\\\"]+)\\\",\\s*\\[([^\\]]*)\\]\\]")
+            val segmentMatcher = segmentPattern.matcher(json)
+            while (segmentMatcher.find()) {
+                val reading = segmentMatcher.group(1)
+                val candBlock = segmentMatcher.group(2)
+
+                val cands = mutableListOf<String>()
+                val candPattern = Pattern.compile("\\\"([^\\\"]*)\\\"")
+                val candMatcher = candPattern.matcher(candBlock)
+                while (candMatcher.find()) {
+                    cands.add(candMatcher.group(1))
                 }
+
+                if (cands.isEmpty()) {
+                    cands.add(reading)
+                }
+                segments.add(Segment(reading, cands))
             }
         } catch (_: Exception) {
         }
 
-        if (results.isEmpty()) {
-            results.add(original)
+        if (segments.isEmpty()) {
+            return listOf(original)
         }
-        return results
+
+        // 1文節のみの場合: そのまま候補リストを返す
+        if (segments.size == 1) {
+            val list = segments[0].candidates.toMutableList()
+            if (!list.contains(segments[0].reading)) list.add(segments[0].reading)
+            return list.distinct()
+        }
+
+        // 複数文節（文章全体・助詞助動詞を含む文）の場合: 全文を合成
+        val results = mutableListOf<String>()
+
+        // 1. 各文節の最有力候補 (index 0) の連結 -> 例: 「今日はダイヤを探そう」
+        val bestSentence = segments.joinToString("") { it.candidates.firstOrNull() ?: it.reading }
+        results.add(bestSentence)
+
+        // 2. 各文節の第2候補などのバリエーションを合成
+        val maxSegmentCands = segments.maxOfOrNull { it.candidates.size } ?: 1
+        for (candIdx in 1 until maxSegmentCands) {
+            val sentence = segments.joinToString("") { seg ->
+                seg.candidates.getOrNull(candIdx) ?: seg.candidates.firstOrNull() ?: seg.reading
+            }
+            if (!results.contains(sentence)) {
+                results.add(sentence)
+            }
+            if (results.size >= 5) break
+        }
+
+        // 3. 全文ひらがな
+        val fullHiragana = segments.joinToString("") { it.reading }
+        if (!results.contains(fullHiragana)) {
+            results.add(fullHiragana)
+        }
+
+        return results.distinct()
     }
 }

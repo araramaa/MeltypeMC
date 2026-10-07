@@ -129,4 +129,37 @@ class MeltypeEngineTest {
         assertEquals(" ", committed[2])
         assertFalse(session.isComposing)
     }
+
+    @Test
+    fun testSentenceWithParticlesAndPunctuation() {
+        val analysis = romajiDetector.analyze("kyouhadaiyawosagasou!")
+        assertTrue(analysis.isValid)
+        assertEquals("きょうはだいやをさがそう!", analysis.kana)
+
+        // 助詞 (ha->は, wo->を) が正しく含まれていること
+        assertTrue(analysis.kana.contains("は"))
+        assertTrue(analysis.kana.contains("を"))
+    }
+
+    @Test
+    fun testGoogleCgiMultiSegmentParsing() {
+        val converter = net.oyasai.meltype.conversion.GoogleCgiConverter()
+        val mockJson = """
+            [
+              ["きょうは", ["今日は", "きょうは", "京は"]],
+              ["だいやを", ["ダイヤを", "だいやを"]],
+              ["さがそう", ["探そう", "さがそう", "捜そう"]]
+            ]
+        """.trimIndent()
+
+        // リフレクションまたは直接メソッドで parseGoogleCgiResponse をテスト
+        val method = converter.javaClass.getDeclaredMethod("parseGoogleCgiResponse", String::class.java, String::class.java)
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val results = method.invoke(converter, mockJson, "きょうはだいやをさがそう") as List<String>
+
+        // 第1候補が全文結合された「今日はダイヤを探そう」になっていること！
+        assertEquals("今日はダイヤを探そう", results[0])
+        assertTrue(results.contains("きょうはだいやをさがそう"))
+    }
 }
