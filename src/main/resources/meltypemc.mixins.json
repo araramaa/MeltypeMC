@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "net.oyasai.meltype.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "ChatScreenMixin",
+    "AnvilScreenMixin",
+    "AbstractSignEditScreenMixin",
+    "BookEditScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

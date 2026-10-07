@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "meltypemc",
+  "version": "${version}",
+  "name": "Meltype MC",
+  "description": "Meltype Japanese Input for Minecraft - 自動英日判別・コマンド対応の日本語入力MOD",
+  "authors": [
+    "araramaa"
+  ],
+  "contact": {
+    "homepage": "https://github.com/araramaa/MeltypeMC",
+    "sources": "https://github.com/araramaa/MeltypeMC",
+    "issues": "https://github.com/araramaa/MeltypeMC/issues"
+  },
+  "license": "GPL-3.0",
+  "icon": "assets/meltypemc/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      {
+        "adapter": "kotlin",
+        "value": "net.oyasai.meltype.MeltypeClient"
+      }
+    ]
+  },
+  "mixins": [
+    "meltypemc.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "minecraft": "*",
+    "java": ">=21",
+    "fabric-language-kotlin": "*"
+  },
+  "custom": {
+    "modmenu": {
+      "links": {
+        "modmenu.source": "https://github.com/araramaa/MeltypeMC",
+        "modmenu.issues": "https://github.com/araramaa/MeltypeMC/issues"
+      }
+    }
+  }
+}

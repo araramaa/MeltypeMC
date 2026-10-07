@@ -1,0 +1,10 @@
+.gradle/
+build/
+!build/libs/meltype-mc-1.0.0.jar
+.idea/
+*.iml
+.run/
+.DS_Store
+Thumbs.db
+
+.kotlin/
