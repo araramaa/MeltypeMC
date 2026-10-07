@@ -1,7 +1,13 @@
 package net.oyasai.meltype.gui
 
-import net.minecraft.client.MinecraftClient
-import net.minecraft.client.gui.DrawContext
+import net.minecraft.client.Minecraft
+import net.minecraft.client.gui.GuiGraphicsExtractor
+import net.minecraft.client.gui.screens.ChatScreen
+import net.minecraft.client.gui.screens.Screen
+import net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen
+import net.minecraft.client.gui.screens.inventory.AnvilScreen
+import net.minecraft.client.gui.screens.inventory.BookEditScreen
+import net.minecraft.network.chat.Component
 import net.oyasai.meltype.engine.MeltypeSession
 
 /**
@@ -16,15 +22,25 @@ object CompositionRenderer {
     private const val ACCENT_COLOR = 0xFFFFAA00.toInt()  // オレンジ/金色アクセント
 
     /**
-     * 指定した座標 (baseX, baseY) を基準にプレビューと候補を描画
+     * 現在開いているScreenのフォアグラウンドにプレビューおよび候補ウィンドウを描画
      */
-    fun renderAt(context: DrawContext, session: MeltypeSession, baseX: Int, baseY: Int) {
+    fun render(screen: Screen, extractor: GuiGraphicsExtractor, session: MeltypeSession) {
         if (!session.isComposing) return
 
         try {
-            val client = MinecraftClient.getInstance() ?: return
-            val textRenderer = client.textRenderer ?: return
-            val screenWidth = client.window?.scaledWidth ?: 400
+            val client = Minecraft.getInstance()
+            val font = client.font
+            val screenWidth = screen.width
+            val screenHeight = screen.height
+
+            // 画面種別ごとの基準座標を算出
+            val (baseX, baseY) = when (screen) {
+                is ChatScreen -> 4 to (screenHeight - 26)
+                is AnvilScreen -> ((screenWidth - 176) / 2 + 58) to ((screenHeight - 166) / 2 + 38)
+                is AbstractSignEditScreen -> ((screenWidth / 2) - 100) to (screenHeight - 50)
+                is BookEditScreen -> ((screenWidth / 2) - 80) to (screenHeight - 35)
+                else -> 4 to (screenHeight - 26)
+            }
 
             // 1. 変換候補リストの描画
             if (session.hasCandidates) {
@@ -38,7 +54,7 @@ object CompositionRenderer {
 
                     var totalWidth = 8
                     for (text in candidateTexts) {
-                        totalWidth += textRenderer.getWidth(text) + 4
+                        totalWidth += font.width(text) + 4
                     }
                     val boxHeight = 14
                     val boxY = baseY - boxHeight - 2
@@ -47,20 +63,21 @@ object CompositionRenderer {
                     val safeX = baseX.coerceIn(2, maxOf(2, screenWidth - totalWidth - 2))
 
                     // 背景ボックス
-                    context.fill(safeX, boxY, safeX + totalWidth, boxY + boxHeight, BG_COLOR)
+                    extractor.fill(safeX, boxY, safeX + totalWidth, boxY + boxHeight, BG_COLOR)
 
                     // 各候補の描画
                     var curX = safeX + 4
                     for ((idx, text) in candidateTexts.withIndex()) {
-                        val itemWidth = textRenderer.getWidth(text)
+                        val itemWidth = font.width(text)
                         val isSelected = idx == session.selectedCandidateIndex
 
                         if (isSelected) {
-                            context.fill(curX - 2, boxY + 1, curX + itemWidth + 2, boxY + boxHeight - 1, HIGHLIGHT_BG)
+                            extractor.fill(curX - 2, boxY + 1, curX + itemWidth + 2, boxY + boxHeight - 1, HIGHLIGHT_BG)
                         }
 
                         val color = if (isSelected) ACCENT_COLOR else TEXT_COLOR
-                        context.drawText(textRenderer, text, curX, boxY + 3, color, true)
+                        val comp = Component.literal(text).withColor(color)
+                        extractor.textRenderer().accept(curX, boxY + 3, comp)
                         curX += itemWidth + 4
                     }
                 }
@@ -70,45 +87,19 @@ object CompositionRenderer {
             val preview = session.previewKana.ifEmpty { session.rawBuffer.toString() }
             if (preview.isNotEmpty()) {
                 val previewText = "変換中: $preview"
-                val textWidth = textRenderer.getWidth(previewText)
+                val textWidth = font.width(previewText)
                 val previewY = if (session.hasCandidates) baseY - 30 else baseY
                 val safeX = baseX.coerceIn(2, maxOf(2, screenWidth - textWidth - 8))
 
                 // 背景
-                context.fill(safeX, previewY - 2, safeX + textWidth + 8, previewY + 11, BG_COLOR)
+                extractor.fill(safeX, previewY - 2, safeX + textWidth + 8, previewY + 11, BG_COLOR)
                 // テキスト
-                context.drawText(textRenderer, previewText, safeX + 4, previewY, ACCENT_COLOR, true)
+                extractor.textRenderer().accept(safeX + 4, previewY, Component.literal(previewText).withColor(ACCENT_COLOR))
                 // 下線
-                context.fill(safeX + 4, previewY + 10, safeX + 4 + textWidth, previewY + 11, ACCENT_COLOR)
+                extractor.fill(safeX + 4, previewY + 10, safeX + 4 + textWidth, previewY + 11, ACCENT_COLOR)
             }
         } catch (_: Throwable) {
-            // 描画エラー時もゲームを落とさない
+            // 描画エラー時もゲームを落とさないフェイルセーフ保護
         }
-    }
-
-    /** チャット画面用の描画（画面下部） */
-    fun renderChat(context: DrawContext, session: MeltypeSession, screenWidth: Int, screenHeight: Int) {
-        renderAt(context, session, 4, screenHeight - 26)
-    }
-
-    /** 金床画面用の描画（金床GUI中央のテキスト入力欄上部） */
-    fun renderAnvil(context: DrawContext, session: MeltypeSession, screenWidth: Int, screenHeight: Int, backgroundWidth: Int = 176, backgroundHeight: Int = 166) {
-        val x = (screenWidth - backgroundWidth) / 2 + 58
-        val y = (screenHeight - backgroundHeight) / 2 + 38
-        renderAt(context, session, x, y)
-    }
-
-    /** 看板編集画面用の描画（画面中央下部） */
-    fun renderSign(context: DrawContext, session: MeltypeSession, screenWidth: Int, screenHeight: Int) {
-        val x = (screenWidth / 2) - 100
-        val y = screenHeight - 50
-        renderAt(context, session, x, y)
-    }
-
-    /** 本編集画面用の描画（本の下部） */
-    fun renderBook(context: DrawContext, session: MeltypeSession, screenWidth: Int, screenHeight: Int) {
-        val x = (screenWidth / 2) - 80
-        val y = screenHeight - 35
-        renderAt(context, session, x, y)
     }
 }

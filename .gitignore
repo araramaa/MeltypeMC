@@ -8,3 +8,4 @@ build/
 Thumbs.db
 
 .kotlin/
+libs/

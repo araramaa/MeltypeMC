@@ -23,14 +23,12 @@
       }
     ]
   },
-  "mixins": [
-    "meltypemc.mixins.json"
-  ],
   "depends": {
-    "fabricloader": ">=${loader_version}",
-    "minecraft": "*",
-    "java": ">=21",
-    "fabric-language-kotlin": "*"
+    "fabricloader": ">=0.19.0",
+    "minecraft": ">=26.1",
+    "java": ">=25",
+    "fabric-language-kotlin": "*",
+    "fabric-screen-api-v1": "*"
   },
   "custom": {
     "modmenu": {
