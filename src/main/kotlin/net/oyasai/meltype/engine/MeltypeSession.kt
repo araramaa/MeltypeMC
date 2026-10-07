@@ -69,6 +69,11 @@ class MeltypeSession(
 
             // 3. 入力可能な英字またはハイフン
             if (c in 'a'..'z' || c in 'A'..'Z' || c == '-') {
+                // ★重要: 既に変換候補が出ている状態で英字が入力された場合、直前の単語を確定して新しく入力を開始
+                if (hasCandidates) {
+                    commitCurrent(insertToChat)
+                }
+
                 rawBuffer.append(c.lowercaseChar())
                 updatePreview()
                 return true
@@ -76,6 +81,7 @@ class MeltypeSession(
 
             // 4. 英字以外の記号や数字が入力された場合
             if (isComposing) {
+                // 候補が出ている状態での数字キーは keyPressed 側で選択済み
                 commitCurrent(insertToChat)
                 insertToChat(c.toString())
                 return true
@@ -101,8 +107,16 @@ class MeltypeSession(
             if (!isComposing) return false
 
             when (keyCode) {
-                // Space: 変換実行 / 次の候補へ
+                // Space: 変換実行 / 次の候補へ（英語判定なら単語確定＋スペース）
                 GLFW.GLFW_KEY_SPACE -> {
+                    // 英語スコアが優勢な場合は、英単語確定＋半角スペースを挿入
+                    val eval = scoreEngine.evaluate(rawBuffer.toString(), isFinal = true)
+                    if (eval.verdict == Verdict.ENGLISH) {
+                        commitCurrent(insertToChat)
+                        insertToChat(" ")
+                        return true
+                    }
+
                     if (hasCandidates) {
                         val count = candidates.size
                         if (count > 0) {
@@ -173,10 +187,14 @@ class MeltypeSession(
 
                 // 1〜9の数字キー (メインキー & テンキー): 候補のダイレクト選択
                 in GLFW.GLFW_KEY_1..GLFW.GLFW_KEY_9 -> {
-                    return selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_1, insertToChat)
+                    if (hasCandidates) {
+                        return selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_1, insertToChat)
+                    }
                 }
                 in GLFW.GLFW_KEY_KP_1..GLFW.GLFW_KEY_KP_9 -> {
-                    return selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_KP_1, insertToChat)
+                    if (hasCandidates) {
+                        return selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_KP_1, insertToChat)
+                    }
                 }
             }
 
@@ -225,6 +243,14 @@ class MeltypeSession(
             return
         }
 
+        // スペース押下時に即座に候補ウィンドウを出し、入力への応答性を最大化
+        val immediateList = mutableListOf(text)
+        if (!immediateList.contains(rawBuffer.toString())) {
+            immediateList.add(rawBuffer.toString())
+        }
+        candidates = immediateList
+        selectedCandidateIndex = 0
+
         // 日本語かな漢字変換を非同期実行
         converter.convertAsync(text).thenAccept { resultList ->
             synchronized(lock) {
@@ -235,15 +261,13 @@ class MeltypeSession(
                     if (!list.contains(rawBuffer.toString())) list.add(rawBuffer.toString())
 
                     candidates = list
-                    selectedCandidateIndex = 0
+                    if (selectedCandidateIndex !in candidates.indices) {
+                        selectedCandidateIndex = 0
+                    }
                 }
             }
         }.exceptionally {
-            // エラー時は安全にひらがなと生英字のみを候補にする
-            synchronized(lock) {
-                candidates = listOf(text, rawBuffer.toString()).distinct()
-                selectedCandidateIndex = 0
-            }
+            // エラー時は既にセットした immediateList のままで安全
             null
         }
     }

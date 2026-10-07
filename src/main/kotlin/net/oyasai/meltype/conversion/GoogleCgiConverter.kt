@@ -37,33 +37,37 @@ class GoogleCgiConverter(
         }
 
         val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8)
-        val url = "https://www.google.com/transliterate?langpair=ja-Hira|ja&text=$encoded"
+        val url = "https://www.google.com/transliterate?langpair=ja-Hira%7Cja&text=$encoded"
 
-        val request = HttpRequest.newBuilder()
-            .uri(URI.create(url))
-            .timeout(Duration.ofMillis(1200))
-            .header("User-Agent", "MeltypeMC/1.0")
-            .GET()
-            .build()
+        return try {
+            val request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofMillis(1200))
+                .header("User-Agent", "MeltypeMC/1.0")
+                .GET()
+                .build()
 
-        return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
-            .thenApply { response ->
-                if (response.statusCode() == 200) {
-                    val parsed = parseGoogleCgiResponse(response.body(), trimmed)
-                    if (parsed.isNotEmpty()) {
-                        cache[trimmed] = parsed
-                        parsed
+            httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+                .thenApply { response ->
+                    if (response.statusCode() == 200) {
+                        val parsed = parseGoogleCgiResponse(response.body(), trimmed)
+                        if (parsed.isNotEmpty()) {
+                            cache[trimmed] = parsed
+                            parsed
+                        } else {
+                            fallback.convertAsync(trimmed).join()
+                        }
                     } else {
                         fallback.convertAsync(trimmed).join()
                     }
-                } else {
+                }
+                .exceptionally {
+                    // 通信エラー時はローカル辞書へフォールバック
                     fallback.convertAsync(trimmed).join()
                 }
-            }
-            .exceptionally {
-                // 通信エラー時（オフライン時など）はローカル辞書へフォールバック
-                fallback.convertAsync(trimmed).join()
-            }
+        } catch (_: Throwable) {
+            fallback.convertAsync(trimmed)
+        }
     }
 
     /**

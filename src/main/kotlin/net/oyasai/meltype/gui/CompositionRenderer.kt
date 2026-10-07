@@ -33,12 +33,13 @@ object CompositionRenderer {
             val screenWidth = screen.width
             val screenHeight = screen.height
 
-            // 画面種別ごとの基準座標を算出
-            val (baseX, baseY) = when (screen) {
-                is ChatScreen -> 4 to (screenHeight - 26)
-                is AnvilScreen -> ((screenWidth - 176) / 2 + 58) to ((screenHeight - 166) / 2 + 38)
-                is AbstractSignEditScreen -> ((screenWidth / 2) - 100) to (screenHeight - 50)
-                is BookEditScreen -> ((screenWidth / 2) - 80) to (screenHeight - 35)
+            // 画面種別ごとの基準座標を算出（MOD等によるカスタムチャット画面にも完全対応）
+            val className = screen.javaClass.name
+            val (baseX, baseY) = when {
+                screen is ChatScreen || className.contains("Chat") -> 4 to (screenHeight - 26)
+                screen is AnvilScreen || className.contains("Anvil") -> ((screenWidth - 176) / 2 + 58) to ((screenHeight - 166) / 2 + 38)
+                screen is AbstractSignEditScreen || className.contains("Sign") -> ((screenWidth / 2) - 100) to (screenHeight - 50)
+                screen is BookEditScreen || className.contains("Book") -> ((screenWidth / 2) - 80) to (screenHeight - 35)
                 else -> 4 to (screenHeight - 26)
             }
 

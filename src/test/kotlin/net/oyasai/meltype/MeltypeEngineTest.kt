@@ -82,4 +82,51 @@ class MeltypeEngineTest {
         assertFalse(slashGate.shouldBypassIme("", 'k'))
         assertFalse(slashGate.isCommandMode)
     }
+
+    @Test
+    fun testContinuousTypingAndAutoCommit() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        // 1. "kyouha" と入力
+        for (c in "kyouha") {
+            val handled = session.onCharTyped(c, "", insertToChat)
+            assertTrue(handled)
+        }
+        assertEquals("きょうは", session.previewKana)
+        assertTrue(session.isComposing)
+
+        // 2. スペースキーを押して変換
+        val spaceHandled = session.onKeyPressed(org.lwjgl.glfw.GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertTrue(spaceHandled)
+        assertTrue(session.hasCandidates)
+        assertEquals(0, committed.size) // まだ確定されていない
+
+        // 3. 確定せずに次の英単語 "diamond" の 'd' を入力 -> 直前の候補が自動確定される！
+        val dHandled = session.onCharTyped('d', "", insertToChat)
+        assertTrue(dHandled)
+        assertEquals(1, committed.size) // "きょうは" が自動確定された！
+        assertEquals("きょうは", committed[0])
+        assertEquals("d", session.rawBuffer.toString())
+
+        // 4. "iamond" を入力
+        for (c in "iamond") {
+            session.onCharTyped(c, "", insertToChat)
+        }
+        assertEquals("diamond", session.rawBuffer.toString())
+
+        // 5. スペースキーを押す -> 英語判定のため "diamond" + " " が確定される！
+        session.onKeyPressed(org.lwjgl.glfw.GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertEquals(3, committed.size)
+        assertEquals("diamond", committed[1])
+        assertEquals(" ", committed[2])
+        assertFalse(session.isComposing)
+    }
 }

@@ -12,6 +12,7 @@ repositories {
 dependencies {
     // Minecraft 26.2 Mojang Official & Fabric API & GLFW & SLF4J
     compileOnly(fileTree("libs") { include("*.jar") })
+    testImplementation(fileTree("libs") { include("*.jar") })
 
     // Unit Testing
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")

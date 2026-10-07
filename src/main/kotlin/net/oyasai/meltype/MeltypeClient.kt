@@ -56,7 +56,10 @@ object MeltypeClient : ClientModInitializer {
             converter = GoogleCgiConverter()
         )
 
-        // 3. Fabric Screen API のライフサイクルイベント登録
+        // 3. Fabric Screen API のライフサイクルイベント登録（BEFORE_INIT と AFTER_INIT 両対応で確実にアタッチ）
+        ScreenEvents.BEFORE_INIT.register(ScreenEvents.BeforeInit { _, screen, _, _ ->
+            registerScreenHandlers(screen)
+        })
         ScreenEvents.AFTER_INIT.register(ScreenEvents.AfterInit { _, screen, _, _ ->
             registerScreenHandlers(screen)
         })
@@ -64,7 +67,14 @@ object MeltypeClient : ClientModInitializer {
         logger.info("[MeltypeMC] Successfully initialized! Auto English/Japanese detection and '/' command mode are ready.")
     }
 
+    private val registeredScreens = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Screen, Boolean>())
+
     private fun registerScreenHandlers(screen: Screen) {
+        if (!isTextInputActive(screen)) return
+        if (!registeredScreens.add(screen)) return // 二重登録防止
+
+        logger.info("[MeltypeMC] Attaching input handlers to screen: ${screen.javaClass.simpleName}")
+
         // 特殊キー入力（Space, Enter, Backspace, Tab, 矢印キー等）のインターセプト
         ScreenKeyboardEvents.allowKeyPress(screen).register(ScreenKeyboardEvents.AllowKeyPress { s, keyEvent ->
             if (!isTextInputActive(s)) return@AllowKeyPress true
@@ -76,6 +86,7 @@ object MeltypeClient : ClientModInitializer {
                 // Meltypeで処理された場合はバニラ画面の通常キー処理をキャンセル
                 !handled
             } catch (e: Throwable) {
+                logger.error("[MeltypeMC] Error in allowKeyPress", e)
                 true // 例外時はバニラ通常処理に安全にフォールバック
             }
         })
@@ -93,6 +104,7 @@ object MeltypeClient : ClientModInitializer {
                 // Meltypeで処理された場合はバニラ画面への文字直接入力をキャンセル
                 !handled
             } catch (e: Throwable) {
+                logger.error("[MeltypeMC] Error in allowCharType", e)
                 true // 例外時はバニラ通常処理に安全にフォールバック
             }
         })
@@ -121,11 +133,18 @@ object MeltypeClient : ClientModInitializer {
      * テキスト入力がアクティブな画面・ウィジェットであるかを安全に判定
      */
     private fun isTextInputActive(screen: Screen): Boolean {
+        val className = screen.javaClass.name
         if (screen is ChatScreen || screen is AnvilScreen || screen is AbstractSignEditScreen || screen is BookEditScreen) {
+            return true
+        }
+        if (className.contains("Chat") || className.contains("Sign") || className.contains("Anvil") || className.contains("Book")) {
             return true
         }
         val focused = screen.focused
         if (focused is EditBox && focused.isFocused && focused.visible) {
+            return true
+        }
+        if (focused != null && focused.javaClass.name.contains("EditBox")) {
             return true
         }
         return false
@@ -135,9 +154,12 @@ object MeltypeClient : ClientModInitializer {
      * 現在の入力テキスト（スラッシュコマンド判定用）を取得
      */
     private fun getCurrentTextFromScreen(screen: Screen): String {
-        val focused = screen.focused
-        if (focused is EditBox) {
-            return focused.value
+        try {
+            val focused = screen.focused
+            if (focused is EditBox) {
+                return focused.value
+            }
+        } catch (_: Throwable) {
         }
         return ""
     }
@@ -146,14 +168,22 @@ object MeltypeClient : ClientModInitializer {
      * 変換確定したテキストを画面の対象テキストフィールドへ直接挿入
      */
     private fun insertTextToScreen(screen: Screen, text: String) {
-        val focused = screen.focused
-        if (focused is EditBox) {
-            focused.insertText(text)
-            return
-        }
-        // 看板（AbstractSignEditScreen）や本（BookEditScreen）向けフォールバック
-        for (c in text) {
-            screen.charTyped(CharacterEvent(c.code))
+        try {
+            if (screen is ChatScreen) {
+                screen.insertText(text, false)
+                return
+            }
+            val focused = screen.focused
+            if (focused is EditBox) {
+                focused.insertText(text)
+                return
+            }
+            // 看板（AbstractSignEditScreen）や本（BookEditScreen）向けフォールバック
+            for (c in text) {
+                screen.charTyped(CharacterEvent(c.code))
+            }
+        } catch (e: Throwable) {
+            logger.error("[MeltypeMC] Failed to insert text to screen: $text", e)
         }
     }
 }
