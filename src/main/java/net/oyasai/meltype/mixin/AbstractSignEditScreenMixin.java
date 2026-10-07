@@ -29,21 +29,24 @@ public abstract class AbstractSignEditScreenMixin {
      */
     @Inject(method = "charTyped", at = @At("HEAD"), cancellable = true)
     private void onCharTyped(char chr, int modifiers, CallbackInfoReturnable<Boolean> cir) {
-        if (this.selectionManager != null) {
-            boolean handled = MeltypeClient.INSTANCE.getSession().onCharTyped(
-                    chr,
-                    "",
-                    text -> {
-                        if (this.selectionManager != null) {
-                            this.selectionManager.insert(text);
+        try {
+            if (this.selectionManager != null) {
+                boolean handled = MeltypeClient.INSTANCE.getSession().onCharTyped(
+                        chr,
+                        "",
+                        text -> {
+                            if (this.selectionManager != null) {
+                                this.selectionManager.insert(text);
+                            }
+                            return null;
                         }
-                        return null;
-                    }
-            );
+                );
 
-            if (handled) {
-                cir.setReturnValue(true);
+                if (handled) {
+                    cir.setReturnValue(true);
+                }
             }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -52,22 +55,25 @@ public abstract class AbstractSignEditScreenMixin {
      */
     @Inject(method = "keyPressed", at = @At("HEAD"), cancellable = true)
     private void onKeyPressed(int keyCode, int scanCode, int modifiers, CallbackInfoReturnable<Boolean> cir) {
-        if (this.selectionManager != null) {
-            boolean handled = MeltypeClient.INSTANCE.getSession().onKeyPressed(
-                    keyCode,
-                    scanCode,
-                    modifiers,
-                    text -> {
-                        if (this.selectionManager != null) {
-                            this.selectionManager.insert(text);
+        try {
+            if (this.selectionManager != null) {
+                boolean handled = MeltypeClient.INSTANCE.getSession().onKeyPressed(
+                        keyCode,
+                        scanCode,
+                        modifiers,
+                        text -> {
+                            if (this.selectionManager != null) {
+                                this.selectionManager.insert(text);
+                            }
+                            return null;
                         }
-                        return null;
-                    }
-            );
+                );
 
-            if (handled) {
-                cir.setReturnValue(true);
+                if (handled) {
+                    cir.setReturnValue(true);
+                }
             }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -76,12 +82,15 @@ public abstract class AbstractSignEditScreenMixin {
      */
     @Inject(method = "render", at = @At("TAIL"))
     private void onRender(DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo ci) {
-        CompositionRenderer.INSTANCE.renderSign(
-                context,
-                MeltypeClient.INSTANCE.getSession(),
-                this.width,
-                this.height
-        );
+        try {
+            CompositionRenderer.INSTANCE.renderSign(
+                    context,
+                    MeltypeClient.INSTANCE.getSession(),
+                    this.width,
+                    this.height
+            );
+        } catch (Throwable ignored) {
+        }
     }
 
     /**
@@ -89,6 +98,9 @@ public abstract class AbstractSignEditScreenMixin {
      */
     @Inject(method = "removed", at = @At("HEAD"))
     private void onRemoved(CallbackInfo ci) {
-        MeltypeClient.INSTANCE.getSession().reset();
+        try {
+            MeltypeClient.INSTANCE.getSession().reset();
+        } catch (Throwable ignored) {
+        }
     }
 }

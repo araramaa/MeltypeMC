@@ -29,20 +29,24 @@ public abstract class ChatScreenMixin {
      */
     @Inject(method = "charTyped", at = @At("HEAD"), cancellable = true)
     private void onCharTyped(char chr, int modifiers, CallbackInfoReturnable<Boolean> cir) {
-        String currentText = this.chatField != null ? this.chatField.getText() : "";
-        boolean handled = MeltypeClient.INSTANCE.getSession().onCharTyped(
-                chr,
-                currentText,
-                text -> {
-                    if (this.chatField != null) {
-                        this.chatField.write(text);
+        try {
+            String currentText = this.chatField != null ? this.chatField.getText() : "";
+            boolean handled = MeltypeClient.INSTANCE.getSession().onCharTyped(
+                    chr,
+                    currentText,
+                    text -> {
+                        if (this.chatField != null) {
+                            this.chatField.write(text);
+                        }
+                        return null;
                     }
-                    return null;
-                }
-        );
+            );
 
-        if (handled) {
-            cir.setReturnValue(true);
+            if (handled) {
+                cir.setReturnValue(true);
+            }
+        } catch (Throwable ignored) {
+            // 例外発生時もゲームを落とさず通常入力にフォールバック
         }
     }
 
@@ -51,20 +55,23 @@ public abstract class ChatScreenMixin {
      */
     @Inject(method = "keyPressed", at = @At("HEAD"), cancellable = true)
     private void onKeyPressed(int keyCode, int scanCode, int modifiers, CallbackInfoReturnable<Boolean> cir) {
-        boolean handled = MeltypeClient.INSTANCE.getSession().onKeyPressed(
-                keyCode,
-                scanCode,
-                modifiers,
-                text -> {
-                    if (this.chatField != null) {
-                        this.chatField.write(text);
+        try {
+            boolean handled = MeltypeClient.INSTANCE.getSession().onKeyPressed(
+                    keyCode,
+                    scanCode,
+                    modifiers,
+                    text -> {
+                        if (this.chatField != null) {
+                            this.chatField.write(text);
+                        }
+                        return null;
                     }
-                    return null;
-                }
-        );
+            );
 
-        if (handled) {
-            cir.setReturnValue(true);
+            if (handled) {
+                cir.setReturnValue(true);
+            }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -73,12 +80,15 @@ public abstract class ChatScreenMixin {
      */
     @Inject(method = "render", at = @At("TAIL"))
     private void onRender(DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo ci) {
-        CompositionRenderer.INSTANCE.renderChat(
-                context,
-                MeltypeClient.INSTANCE.getSession(),
-                this.width,
-                this.height
-        );
+        try {
+            CompositionRenderer.INSTANCE.renderChat(
+                    context,
+                    MeltypeClient.INSTANCE.getSession(),
+                    this.width,
+                    this.height
+            );
+        } catch (Throwable ignored) {
+        }
     }
 
     /**
@@ -86,7 +96,10 @@ public abstract class ChatScreenMixin {
      */
     @Inject(method = "removed", at = @At("HEAD"))
     private void onRemoved(CallbackInfo ci) {
-        MeltypeClient.INSTANCE.getSession().reset();
-        MeltypeClient.INSTANCE.getSlashCommandGate().reset();
+        try {
+            MeltypeClient.INSTANCE.getSession().reset();
+            MeltypeClient.INSTANCE.getSlashCommandGate().reset();
+        } catch (Throwable ignored) {
+        }
     }
 }

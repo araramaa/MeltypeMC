@@ -29,21 +29,24 @@ public abstract class BookEditScreenMixin {
      */
     @Inject(method = "charTyped", at = @At("HEAD"), cancellable = true)
     private void onCharTyped(char chr, int modifiers, CallbackInfoReturnable<Boolean> cir) {
-        if (this.currentPageSelectionManager != null) {
-            boolean handled = MeltypeClient.INSTANCE.getSession().onCharTyped(
-                    chr,
-                    "",
-                    text -> {
-                        if (this.currentPageSelectionManager != null) {
-                            this.currentPageSelectionManager.insert(text);
+        try {
+            if (this.currentPageSelectionManager != null) {
+                boolean handled = MeltypeClient.INSTANCE.getSession().onCharTyped(
+                        chr,
+                        "",
+                        text -> {
+                            if (this.currentPageSelectionManager != null) {
+                                this.currentPageSelectionManager.insert(text);
+                            }
+                            return null;
                         }
-                        return null;
-                    }
-            );
+                );
 
-            if (handled) {
-                cir.setReturnValue(true);
+                if (handled) {
+                    cir.setReturnValue(true);
+                }
             }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -52,22 +55,25 @@ public abstract class BookEditScreenMixin {
      */
     @Inject(method = "keyPressed", at = @At("HEAD"), cancellable = true)
     private void onKeyPressed(int keyCode, int scanCode, int modifiers, CallbackInfoReturnable<Boolean> cir) {
-        if (this.currentPageSelectionManager != null) {
-            boolean handled = MeltypeClient.INSTANCE.getSession().onKeyPressed(
-                    keyCode,
-                    scanCode,
-                    modifiers,
-                    text -> {
-                        if (this.currentPageSelectionManager != null) {
-                            this.currentPageSelectionManager.insert(text);
+        try {
+            if (this.currentPageSelectionManager != null) {
+                boolean handled = MeltypeClient.INSTANCE.getSession().onKeyPressed(
+                        keyCode,
+                        scanCode,
+                        modifiers,
+                        text -> {
+                            if (this.currentPageSelectionManager != null) {
+                                this.currentPageSelectionManager.insert(text);
+                            }
+                            return null;
                         }
-                        return null;
-                    }
-            );
+                );
 
-            if (handled) {
-                cir.setReturnValue(true);
+                if (handled) {
+                    cir.setReturnValue(true);
+                }
             }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -76,12 +82,15 @@ public abstract class BookEditScreenMixin {
      */
     @Inject(method = "render", at = @At("TAIL"))
     private void onRender(DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo ci) {
-        CompositionRenderer.INSTANCE.renderBook(
+        try {
+            CompositionRenderer.INSTANCE.renderBook(
                 context,
                 MeltypeClient.INSTANCE.getSession(),
                 this.width,
                 this.height
-        );
+            );
+        } catch (Throwable ignored) {
+        }
     }
 
     /**
@@ -89,6 +98,9 @@ public abstract class BookEditScreenMixin {
      */
     @Inject(method = "removed", at = @At("HEAD"))
     private void onRemoved(CallbackInfo ci) {
-        MeltypeClient.INSTANCE.getSession().reset();
+        try {
+            MeltypeClient.INSTANCE.getSession().reset();
+        } catch (Throwable ignored) {
+        }
     }
 }

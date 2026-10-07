@@ -29,22 +29,25 @@ public abstract class AnvilScreenMixin {
      */
     @Inject(method = "charTyped", at = @At("HEAD"), cancellable = true)
     private void onCharTyped(char chr, int modifiers, CallbackInfoReturnable<Boolean> cir) {
-        if (this.nameField != null && this.nameField.isActive()) {
-            String currentText = this.nameField.getText();
-            boolean handled = MeltypeClient.INSTANCE.getSession().onCharTyped(
-                    chr,
-                    currentText,
-                    text -> {
-                        if (this.nameField != null) {
-                            this.nameField.write(text);
+        try {
+            if (this.nameField != null && this.nameField.isActive()) {
+                String currentText = this.nameField.getText();
+                boolean handled = MeltypeClient.INSTANCE.getSession().onCharTyped(
+                        chr,
+                        currentText,
+                        text -> {
+                            if (this.nameField != null) {
+                                this.nameField.write(text);
+                            }
+                            return null;
                         }
-                        return null;
-                    }
-            );
+                );
 
-            if (handled) {
-                cir.setReturnValue(true);
+                if (handled) {
+                    cir.setReturnValue(true);
+                }
             }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -53,22 +56,25 @@ public abstract class AnvilScreenMixin {
      */
     @Inject(method = "keyPressed", at = @At("HEAD"), cancellable = true)
     private void onKeyPressed(int keyCode, int scanCode, int modifiers, CallbackInfoReturnable<Boolean> cir) {
-        if (this.nameField != null && this.nameField.isActive()) {
-            boolean handled = MeltypeClient.INSTANCE.getSession().onKeyPressed(
-                    keyCode,
-                    scanCode,
-                    modifiers,
-                    text -> {
-                        if (this.nameField != null) {
-                            this.nameField.write(text);
+        try {
+            if (this.nameField != null && this.nameField.isActive()) {
+                boolean handled = MeltypeClient.INSTANCE.getSession().onKeyPressed(
+                        keyCode,
+                        scanCode,
+                        modifiers,
+                        text -> {
+                            if (this.nameField != null) {
+                                this.nameField.write(text);
+                            }
+                            return null;
                         }
-                        return null;
-                    }
-            );
+                );
 
-            if (handled) {
-                cir.setReturnValue(true);
+                if (handled) {
+                    cir.setReturnValue(true);
+                }
             }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -77,15 +83,18 @@ public abstract class AnvilScreenMixin {
      */
     @Inject(method = "render", at = @At("TAIL"))
     private void onRender(DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo ci) {
-        AnvilScreen self = (AnvilScreen) (Object) this;
-        CompositionRenderer.INSTANCE.renderAnvil(
-                context,
-                MeltypeClient.INSTANCE.getSession(),
-                self.width,
-                self.height,
-                this.backgroundWidth,
-                this.backgroundHeight
-        );
+        try {
+            AnvilScreen self = (AnvilScreen) (Object) this;
+            CompositionRenderer.INSTANCE.renderAnvil(
+                    context,
+                    MeltypeClient.INSTANCE.getSession(),
+                    self.width,
+                    self.height,
+                    this.backgroundWidth,
+                    this.backgroundHeight
+            );
+        } catch (Throwable ignored) {
+        }
     }
 
     /**
@@ -93,6 +102,9 @@ public abstract class AnvilScreenMixin {
      */
     @Inject(method = "removed", at = @At("HEAD"))
     private void onRemoved(CallbackInfo ci) {
-        MeltypeClient.INSTANCE.getSession().reset();
+        try {
+            MeltypeClient.INSTANCE.getSession().reset();
+        } catch (Throwable ignored) {
+        }
     }
 }

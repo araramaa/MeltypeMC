@@ -47,6 +47,26 @@ class MeltypeEngineTest {
     }
 
     @Test
+    fun testEdgeCasesRobustness() {
+        // 空文字
+        val emptyResult = scoreEngine.evaluate("", isFinal = true)
+        assertNotNull(emptyResult)
+
+        // 記号や数字混じり
+        val symbolAnalysis = romajiDetector.analyze("!@#$%^")
+        assertFalse(symbolAnalysis.isValid)
+
+        // 1文字判定
+        val singleResult = scoreEngine.evaluate("a", isFinal = false)
+        assertNotNull(singleResult)
+
+        // 大文字混じり
+        val upperAnalysis = romajiDetector.analyze("KyouHa")
+        assertTrue(upperAnalysis.isValid)
+        assertEquals("きょうは", upperAnalysis.kana)
+    }
+
+    @Test
     fun testSlashCommandGateBypass() {
         // ユーザー指定要件: スラッシュを入力したときは勝手にコマンド入力モードになって欲しい
         // 1. チャット欄が空で '/' を入力した場合 -> バイパス

@@ -3,11 +3,11 @@ package net.oyasai.meltype.engine
 import net.oyasai.meltype.config.MeltypeConfig
 import net.oyasai.meltype.conversion.GoogleCgiConverter
 import net.oyasai.meltype.conversion.IConverter
-import net.oyasai.meltype.conversion.LocalDictionaryConverter
 import org.lwjgl.glfw.GLFW
 
 /**
- * 1回のチャット入力セッション（入力バッファ・変換候補・状態遷移）を管理するクラス
+ * 1回のチャット・GUI入力セッション（入力バッファ・変換候補・状態遷移）を管理するクラス
+ * 高い堅牢性・例外安全性・直しやすい構造を備えています。
  */
 class MeltypeSession(
     private val romajiDetector: RomajiDetector,
@@ -17,6 +17,8 @@ class MeltypeSession(
     private val converter: IConverter = GoogleCgiConverter()
 ) {
 
+    private val lock = Any()
+
     /** 現在入力中の生キーストローク（アルファベット列） */
     var rawBuffer: StringBuilder = StringBuilder()
         private set
@@ -25,7 +27,8 @@ class MeltypeSession(
     var previewKana: String = ""
         private set
 
-    /** 変換候補リスト */
+    /** 変換候補リスト（スレッドセーフにアクセス） */
+    @Volatile
     var candidates: List<String> = emptyList()
         private set
 
@@ -34,10 +37,10 @@ class MeltypeSession(
         private set
 
     /** 現在IME入力・変換中かどうか */
-    val isComposing: Boolean get() = rawBuffer.isNotEmpty()
+    val isComposing: Boolean get() = synchronized(lock) { rawBuffer.isNotEmpty() }
 
     /** 変換候補ウィンドウを表示中かどうか */
-    val hasCandidates: Boolean get() = candidates.isNotEmpty()
+    val hasCandidates: Boolean get() = synchronized(lock) { candidates.isNotEmpty() }
 
     /**
      * 文字入力イベント（charTyped）の処理
@@ -46,41 +49,40 @@ class MeltypeSession(
     fun onCharTyped(c: Char, currentChatText: String, insertToChat: (String) -> Unit): Boolean {
         if (!MeltypeConfig.enabled) return false
 
-        // 1. スラッシュコマンド判定（最優先）
-        // スラッシュで始まる場合はIMEをバイパスして直接コマンド入力へ
-        if (slashCommandGate.shouldBypassIme(currentChatText, c)) {
-            // もし未確定バッファがあれば先に確定
-            if (isComposing) {
-                flushAsIs(insertToChat)
+        synchronized(lock) {
+            // 1. スラッシュコマンド判定（最優先）
+            if (slashCommandGate.shouldBypassIme(currentChatText, c)) {
+                if (isComposing) {
+                    flushAsIs(insertToChat)
+                }
+                return false // マイクラ標準処理に任せる
             }
-            return false // マイクラ標準処理に任せる
-        }
 
-        // 2. 空白（スペース）の処理
-        if (c == ' ') {
-            if (isComposing) {
-                // スペースキーは keyPressed 側で変換トリガーとして処理
+            // 2. 空白（スペース）の処理
+            if (c == ' ') {
+                if (isComposing) {
+                    // スペースキーは keyPressed 側で変換トリガーとして処理
+                    return true
+                }
+                return false
+            }
+
+            // 3. 入力可能な英字またはハイフン
+            if (c in 'a'..'z' || c in 'A'..'Z' || c == '-') {
+                rawBuffer.append(c.lowercaseChar())
+                updatePreview()
                 return true
             }
+
+            // 4. 英字以外の記号や数字が入力された場合
+            if (isComposing) {
+                commitCurrent(insertToChat)
+                insertToChat(c.toString())
+                return true
+            }
+
             return false
         }
-
-        // 3. 入力可能な英字または記号か確認
-        if (c in 'a'..'z' || c in 'A'..'Z' || c == '-') {
-            rawBuffer.append(c.lowercaseChar())
-            updatePreview()
-            return true
-        }
-
-        // 英字以外の記号や数字が入力された場合
-        if (isComposing) {
-            // 直前のバッファを確定してから記号を入力
-            commitCurrent(insertToChat)
-            insertToChat(c.toString())
-            return true
-        }
-
-        return false
     }
 
     /**
@@ -90,84 +92,108 @@ class MeltypeSession(
     fun onKeyPressed(keyCode: Int, scanCode: Int, modifiers: Int, insertToChat: (String) -> Unit): Boolean {
         if (!MeltypeConfig.enabled) return false
 
-        // コマンドモード中の場合、IMEキー処理はスキップ
-        if (slashCommandGate.isCommandMode && !isComposing) {
-            return false
-        }
-
-        if (!isComposing) return false
-
-        when (keyCode) {
-            // Space: 変換実行 / 次の候補へ
-            GLFW.GLFW_KEY_SPACE -> {
-                if (hasCandidates) {
-                    // 次の候補へ
-                    selectedCandidateIndex = (selectedCandidateIndex + 1) % candidates.size
-                } else {
-                    // 変換開始
-                    triggerConversion()
-                }
-                return true
-            }
-
-            // Enter: 確定
-            GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> {
-                commitCurrent(insertToChat)
-                return true
-            }
-
-            // Backspace: 1文字削除
-            GLFW.GLFW_KEY_BACKSPACE -> {
-                if (hasCandidates) {
-                    // 候補選択を取り消してひらがな入力状態に戻る
-                    candidates = emptyList()
-                    selectedCandidateIndex = 0
-                    return true
-                }
-                if (rawBuffer.isNotEmpty()) {
-                    rawBuffer.deleteCharAt(rawBuffer.length - 1)
-                    updatePreview()
-                    return true
-                }
+        synchronized(lock) {
+            // コマンドモード中の場合、IMEキー処理はスキップ
+            if (slashCommandGate.isCommandMode && !isComposing) {
                 return false
             }
 
-            // Escape: 変換キャンセル
-            GLFW.GLFW_KEY_ESCAPE -> {
-                reset()
-                return true
-            }
+            if (!isComposing) return false
 
-            // Tab: 候補送り
-            GLFW.GLFW_KEY_TAB -> {
-                if (hasCandidates) {
-                    val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
-                    if (shift) {
-                        selectedCandidateIndex = if (selectedCandidateIndex - 1 < 0) candidates.size - 1 else selectedCandidateIndex - 1
+            when (keyCode) {
+                // Space: 変換実行 / 次の候補へ
+                GLFW.GLFW_KEY_SPACE -> {
+                    if (hasCandidates) {
+                        val count = candidates.size
+                        if (count > 0) {
+                            selectedCandidateIndex = (selectedCandidateIndex + 1) % count
+                        }
                     } else {
-                        selectedCandidateIndex = (selectedCandidateIndex + 1) % candidates.size
+                        triggerConversion()
                     }
                     return true
                 }
-            }
 
-            // 1〜9の数字キー: 候補のダイレクト選択
-            in GLFW.GLFW_KEY_1..GLFW.GLFW_KEY_9 -> {
-                if (hasCandidates) {
-                    val index = keyCode - GLFW.GLFW_KEY_1
-                    if (index < candidates.size) {
-                        selectedCandidateIndex = index
-                        commitCurrent(insertToChat)
+                // Enter: 確定
+                GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> {
+                    commitCurrent(insertToChat)
+                    return true
+                }
+
+                // Backspace: 1文字削除
+                GLFW.GLFW_KEY_BACKSPACE -> {
+                    if (hasCandidates) {
+                        candidates = emptyList()
+                        selectedCandidateIndex = 0
+                        return true
+                    }
+                    if (rawBuffer.isNotEmpty()) {
+                        rawBuffer.deleteCharAt(rawBuffer.length - 1)
+                        updatePreview()
+                        return true
+                    }
+                    return false
+                }
+
+                // Escape: 変換キャンセル
+                GLFW.GLFW_KEY_ESCAPE -> {
+                    reset()
+                    return true
+                }
+
+                // Tab / Shift+Tab: 候補送り・戻し
+                GLFW.GLFW_KEY_TAB -> {
+                    if (hasCandidates) {
+                        val count = candidates.size
+                        if (count > 0) {
+                            val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
+                            selectedCandidateIndex = if (shift) {
+                                if (selectedCandidateIndex - 1 < 0) count - 1 else selectedCandidateIndex - 1
+                            } else {
+                                (selectedCandidateIndex + 1) % count
+                            }
+                        }
                         return true
                     }
                 }
-            }
-        }
 
+                // 左右下矢印キー: 候補選択
+                GLFW.GLFW_KEY_RIGHT, GLFW.GLFW_KEY_DOWN -> {
+                    if (hasCandidates && candidates.isNotEmpty()) {
+                        selectedCandidateIndex = (selectedCandidateIndex + 1) % candidates.size
+                        return true
+                    }
+                }
+                GLFW.GLFW_KEY_LEFT, GLFW.GLFW_KEY_UP -> {
+                    if (hasCandidates && candidates.isNotEmpty()) {
+                        selectedCandidateIndex = if (selectedCandidateIndex - 1 < 0) candidates.size - 1 else selectedCandidateIndex - 1
+                        return true
+                    }
+                }
+
+                // 1〜9の数字キー (メインキー & テンキー): 候補のダイレクト選択
+                in GLFW.GLFW_KEY_1..GLFW.GLFW_KEY_9 -> {
+                    return selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_1, insertToChat)
+                }
+                in GLFW.GLFW_KEY_KP_1..GLFW.GLFW_KEY_KP_9 -> {
+                    return selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_KP_1, insertToChat)
+                }
+            }
+
+            return false
+        }
+    }
+
+    private fun selectCandidateByIndex(index: Int, insertToChat: (String) -> Unit): Boolean {
+        if (hasCandidates && index in candidates.indices) {
+            selectedCandidateIndex = index
+            commitCurrent(insertToChat)
+            return true
+        }
         return false
     }
 
-    /** 入力プレビューと英日判定の更新 */
+    /** 入力プレビューの更新 */
     private fun updatePreview() {
         val text = rawBuffer.toString()
         if (text.isEmpty()) {
@@ -176,16 +202,23 @@ class MeltypeSession(
             return
         }
 
-        // ひらがな変換プレビューを作成
-        previewKana = romajiDetector.toKanaLenient(text)
+        try {
+            previewKana = romajiDetector.toKanaLenient(text)
+        } catch (_: Throwable) {
+            previewKana = text
+        }
     }
 
     /** 変換リクエストの送信 */
     private fun triggerConversion() {
         val text = previewKana.ifEmpty { rawBuffer.toString() }
-        val eval = scoreEngine.evaluate(rawBuffer.toString(), isFinal = true)
+        val eval = try {
+            scoreEngine.evaluate(rawBuffer.toString(), isFinal = true)
+        } catch (_: Throwable) {
+            DetectionResult(Verdict.UNDECIDED, 0, 0, "fallback")
+        }
 
-        // 英語スコアが圧倒的に高い場合はそのまま英字を第一候補に
+        // 英語スコアが優勢な場合は英字を第1候補に
         if (eval.verdict == Verdict.ENGLISH) {
             candidates = listOf(rawBuffer.toString())
             selectedCandidateIndex = 0
@@ -194,50 +227,77 @@ class MeltypeSession(
 
         // 日本語かな漢字変換を非同期実行
         converter.convertAsync(text).thenAccept { resultList ->
-            val list = resultList.take(MeltypeConfig.maxCandidates).toMutableList()
-            if (!list.contains(text)) list.add(text)
-            if (!list.contains(rawBuffer.toString())) list.add(rawBuffer.toString())
+            synchronized(lock) {
+                // 入力状態が変わっていなければ候補をセット
+                if (rawBuffer.isNotEmpty()) {
+                    val list = resultList.take(MeltypeConfig.maxCandidates).toMutableList()
+                    if (!list.contains(text)) list.add(text)
+                    if (!list.contains(rawBuffer.toString())) list.add(rawBuffer.toString())
 
-            candidates = list
-            selectedCandidateIndex = 0
+                    candidates = list
+                    selectedCandidateIndex = 0
+                }
+            }
+        }.exceptionally {
+            // エラー時は安全にひらがなと生英字のみを候補にする
+            synchronized(lock) {
+                candidates = listOf(text, rawBuffer.toString()).distinct()
+                selectedCandidateIndex = 0
+            }
+            null
         }
     }
 
     /** 現在選択中の候補（またはプレビュー文字列）を確定してチャット欄に挿入 */
     fun commitCurrent(insertToChat: (String) -> Unit) {
-        val committedText = when {
-            hasCandidates -> candidates[selectedCandidateIndex]
-            previewKana.isNotEmpty() -> {
-                // Spaceを押さずにEnterした場合は、ScoreEngineで英単語かひらがなかを自動判定
-                val eval = scoreEngine.evaluate(rawBuffer.toString(), isFinal = true)
-                if (eval.verdict == Verdict.ENGLISH) {
-                    rawBuffer.toString()
-                } else {
-                    previewKana
+        synchronized(lock) {
+            val committedText = when {
+                hasCandidates -> candidates.getOrNull(selectedCandidateIndex) ?: candidates.firstOrNull() ?: previewKana
+                previewKana.isNotEmpty() -> {
+                    val eval = try {
+                        scoreEngine.evaluate(rawBuffer.toString(), isFinal = true)
+                    } catch (_: Throwable) {
+                        DetectionResult(Verdict.JAPANESE, 1, 0, "fallback")
+                    }
+                    if (eval.verdict == Verdict.ENGLISH) {
+                        rawBuffer.toString()
+                    } else {
+                        previewKana
+                    }
+                }
+                else -> rawBuffer.toString()
+            }
+
+            if (committedText.isNotEmpty()) {
+                try {
+                    insertToChat(committedText)
+                } catch (_: Throwable) {
                 }
             }
-            else -> rawBuffer.toString()
+            reset()
         }
-
-        if (committedText.isNotEmpty()) {
-            insertToChat(committedText)
-        }
-        reset()
     }
 
     /** 生のアルファベットのまま確定して流し込む */
     private fun flushAsIs(insertToChat: (String) -> Unit) {
-        if (rawBuffer.isNotEmpty()) {
-            insertToChat(rawBuffer.toString())
+        synchronized(lock) {
+            if (rawBuffer.isNotEmpty()) {
+                try {
+                    insertToChat(rawBuffer.toString())
+                } catch (_: Throwable) {
+                }
+            }
+            reset()
         }
-        reset()
     }
 
     /** 入力状態をリセット */
     fun reset() {
-        rawBuffer.clear()
-        previewKana = ""
-        candidates = emptyList()
-        selectedCandidateIndex = 0
+        synchronized(lock) {
+            rawBuffer.clear()
+            previewKana = ""
+            candidates = emptyList()
+            selectedCandidateIndex = 0
+        }
     }
 }

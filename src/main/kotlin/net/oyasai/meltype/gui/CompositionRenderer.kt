@@ -6,7 +6,7 @@ import net.oyasai.meltype.engine.MeltypeSession
 
 /**
  * 画面上に入力中テキスト（下線プレビュー）および変換候補ウィンドウを描画するレンダラー
- * チャット欄、看板、金床、本など各種GUIに対応
+ * 画面外はみ出し防止および例外安全ガードを備えています。
  */
 object CompositionRenderer {
 
@@ -21,57 +21,68 @@ object CompositionRenderer {
     fun renderAt(context: DrawContext, session: MeltypeSession, baseX: Int, baseY: Int) {
         if (!session.isComposing) return
 
-        val client = MinecraftClient.getInstance()
-        val textRenderer = client.textRenderer ?: return
+        try {
+            val client = MinecraftClient.getInstance() ?: return
+            val textRenderer = client.textRenderer ?: return
+            val screenWidth = client.window?.scaledWidth ?: 400
 
-        // 1. 変換候補リストの描画
-        if (session.hasCandidates) {
-            val candidates = session.candidates
-            val candidateTexts = candidates.mapIndexed { idx, cand ->
-                val num = idx + 1
-                val prefix = if (idx == session.selectedCandidateIndex) "▶ $num." else "  $num."
-                "$prefix $cand "
-            }
+            // 1. 変換候補リストの描画
+            if (session.hasCandidates) {
+                val candidates = session.candidates
+                if (candidates.isNotEmpty()) {
+                    val candidateTexts = candidates.mapIndexed { idx, cand ->
+                        val num = idx + 1
+                        val prefix = if (idx == session.selectedCandidateIndex) "▶ $num." else "  $num."
+                        "$prefix $cand "
+                    }
 
-            var totalWidth = 8
-            for (text in candidateTexts) {
-                totalWidth += textRenderer.getWidth(text) + 4
-            }
-            val boxHeight = 14
-            val boxY = baseY - boxHeight - 2
+                    var totalWidth = 8
+                    for (text in candidateTexts) {
+                        totalWidth += textRenderer.getWidth(text) + 4
+                    }
+                    val boxHeight = 14
+                    val boxY = baseY - boxHeight - 2
 
-            // 背景ボックス
-            context.fill(baseX, boxY, baseX + totalWidth, boxY + boxHeight, BG_COLOR)
+                    // 画面右端へのはみ出し防止
+                    val safeX = baseX.coerceIn(2, maxOf(2, screenWidth - totalWidth - 2))
 
-            // 各候補の描画
-            var curX = baseX + 4
-            for ((idx, text) in candidateTexts.withIndex()) {
-                val itemWidth = textRenderer.getWidth(text)
-                val isSelected = idx == session.selectedCandidateIndex
+                    // 背景ボックス
+                    context.fill(safeX, boxY, safeX + totalWidth, boxY + boxHeight, BG_COLOR)
 
-                if (isSelected) {
-                    context.fill(curX - 2, boxY + 1, curX + itemWidth + 2, boxY + boxHeight - 1, HIGHLIGHT_BG)
+                    // 各候補の描画
+                    var curX = safeX + 4
+                    for ((idx, text) in candidateTexts.withIndex()) {
+                        val itemWidth = textRenderer.getWidth(text)
+                        val isSelected = idx == session.selectedCandidateIndex
+
+                        if (isSelected) {
+                            context.fill(curX - 2, boxY + 1, curX + itemWidth + 2, boxY + boxHeight - 1, HIGHLIGHT_BG)
+                        }
+
+                        val color = if (isSelected) ACCENT_COLOR else TEXT_COLOR
+                        context.drawText(textRenderer, text, curX, boxY + 3, color, true)
+                        curX += itemWidth + 4
+                    }
                 }
-
-                val color = if (isSelected) ACCENT_COLOR else TEXT_COLOR
-                context.drawText(textRenderer, text, curX, boxY + 3, color, true)
-                curX += itemWidth + 4
             }
-        }
 
-        // 2. 入力中ひらがなプレビュー（下線付き）の描画
-        val preview = session.previewKana.ifEmpty { session.rawBuffer.toString() }
-        if (preview.isNotEmpty()) {
-            val previewText = "変換中: $preview"
-            val textWidth = textRenderer.getWidth(previewText)
-            val previewY = if (session.hasCandidates) baseY - 30 else baseY
+            // 2. 入力中ひらがなプレビュー（下線付き）の描画
+            val preview = session.previewKana.ifEmpty { session.rawBuffer.toString() }
+            if (preview.isNotEmpty()) {
+                val previewText = "変換中: $preview"
+                val textWidth = textRenderer.getWidth(previewText)
+                val previewY = if (session.hasCandidates) baseY - 30 else baseY
+                val safeX = baseX.coerceIn(2, maxOf(2, screenWidth - textWidth - 8))
 
-            // 背景
-            context.fill(baseX, previewY - 2, baseX + textWidth + 8, previewY + 11, BG_COLOR)
-            // テキスト
-            context.drawText(textRenderer, previewText, baseX + 4, previewY, ACCENT_COLOR, true)
-            // 下線
-            context.fill(baseX + 4, previewY + 10, baseX + 4 + textWidth, previewY + 11, ACCENT_COLOR)
+                // 背景
+                context.fill(safeX, previewY - 2, safeX + textWidth + 8, previewY + 11, BG_COLOR)
+                // テキスト
+                context.drawText(textRenderer, previewText, safeX + 4, previewY, ACCENT_COLOR, true)
+                // 下線
+                context.fill(safeX + 4, previewY + 10, safeX + 4 + textWidth, previewY + 11, ACCENT_COLOR)
+            }
+        } catch (_: Throwable) {
+            // 描画エラー時もゲームを落とさない
         }
     }
 
