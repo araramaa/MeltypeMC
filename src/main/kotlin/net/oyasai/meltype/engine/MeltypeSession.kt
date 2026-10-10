@@ -1,6 +1,7 @@
 package net.oyasai.meltype.engine
 
 import net.oyasai.meltype.config.MeltypeConfig
+import net.oyasai.meltype.conversion.ConversionLearningStore
 import net.oyasai.meltype.conversion.GoogleCgiConverter
 import net.oyasai.meltype.conversion.IConverter
 import org.lwjgl.glfw.GLFW
@@ -15,10 +16,15 @@ class MeltypeSession(
     private val scoreEngine: ScoreEngine,
     private val slashCommandGate: SlashCommandGate,
     private val converter: IConverter = GoogleCgiConverter(),
-    private val compoundWordSplitter: CompoundWordSplitter = CompoundWordSplitter(englishDetector, romajiDetector)
+    private val compoundWordSplitter: CompoundWordSplitter = CompoundWordSplitter(englishDetector, romajiDetector),
+    val learningStore: ConversionLearningStore = ConversionLearningStore()
 ) {
 
     private val lock = Any()
+
+    /** 現在変換中の読み・入力文字列（学習記録用） */
+    private var activeReading: String = ""
+    private var activeRaw: String = ""
 
     /** 現在の入力モード（HYBRID: 自動英日ハイブリッド / DIRECT: バニラ直接入力） */
     var currentInputMode: InputMode = MeltypeConfig.initialInputMode
@@ -455,6 +461,8 @@ class MeltypeSession(
     private fun triggerConversion() {
         val raw = rawBuffer.toString()
         val text = previewKana.ifEmpty { raw }
+        activeReading = text
+        activeRaw = raw
 
         // 1. スペース区切りハイブリッド文（例: "kyouha diamond wo sagasou"）の処理
         if (raw.contains(' ')) {
@@ -483,11 +491,13 @@ class MeltypeSession(
             return
         }
 
-        // 即座に応答可能な初期候補をセット（応答性最大化）
-        val immediateList = mutableListOf(text)
-        if (!immediateList.contains(raw)) {
-            immediateList.add(raw)
-        }
+        // 即座に応答可能な初期候補をセット（★学習済み候補を最優先で配置）
+        val learnedList = learningStore.getLearnedCandidates(text)
+        val immediateList = mutableListOf<String>()
+        immediateList.addAll(learnedList)
+        if (!immediateList.contains(text)) immediateList.add(text)
+        if (!immediateList.contains(raw)) immediateList.add(raw)
+
         candidates = immediateList
         selectedCandidateIndex = 0
 
@@ -495,7 +505,8 @@ class MeltypeSession(
         converter.convertAsync(text).thenAccept { resultList ->
             synchronized(lock) {
                 if (rawBuffer.isNotEmpty()) {
-                    val list = resultList.take(MeltypeConfig.maxCandidates).toMutableList()
+                    val ranked = learningStore.rankCandidates(text, resultList)
+                    val list = ranked.take(MeltypeConfig.maxCandidates).toMutableList()
                     if (!list.contains(text)) list.add(text)
                     if (!list.contains(raw)) list.add(raw)
 
@@ -515,16 +526,24 @@ class MeltypeSession(
      * 英単語（"diamond"）は保護し、日本語部分（"wosagasou" -> "を探そう"）のみを変換して結合
      */
     private fun triggerCompoundConversion(compound: CompoundSplit, raw: String) {
+        activeReading = raw
+        activeRaw = raw
         val initialKana = "${compound.english}${compound.japaneseKana}"
-        candidates = listOf(initialKana, raw)
+
+        // ★学習済み候補の事前適用（複合語全体および日本語部分）
+        val learnedFull = learningStore.getLearnedCandidates(raw)
+        val learnedJp = learningStore.getLearnedCandidates(compound.japaneseKana).map { "${compound.english}$it" }
+        val immediateList = (learnedFull + learnedJp + listOf(initialKana, raw)).distinct().toMutableList()
+
+        candidates = immediateList
         selectedCandidateIndex = 0
 
         converter.convertAsync(compound.japaneseKana).thenAccept { resultList ->
             synchronized(lock) {
                 if (rawBuffer.isNotEmpty()) {
-                    val list = resultList.take(MeltypeConfig.maxCandidates)
-                        .map { "${compound.english}$it" }
-                        .toMutableList()
+                    val fullList = resultList.map { "${compound.english}$it" }
+                    val ranked = learningStore.rankCandidates(raw, fullList)
+                    val list = ranked.take(MeltypeConfig.maxCandidates).toMutableList()
                     if (!list.contains(initialKana)) list.add(initialKana)
                     if (!list.contains(raw)) list.add(raw)
 
@@ -596,6 +615,10 @@ class MeltypeSession(
     /** 現在選択中の候補（またはプレビュー文字列）を確定してチャット欄に挿入 */
     fun commitCurrent(insertToChat: (String) -> Unit) {
         synchronized(lock) {
+            val hadCandidates = hasCandidates
+            val currentReading = activeReading
+            val currentRaw = activeRaw
+
             val committedText = when {
                 hasCandidates -> candidates.getOrNull(selectedCandidateIndex) ?: candidates.firstOrNull() ?: previewKana
                 previewKana.isNotEmpty() -> {
@@ -620,6 +643,21 @@ class MeltypeSession(
             }
 
             if (committedText.isNotEmpty()) {
+                // ★変換学習: 候補ウィンドウから選択・確定した場合に学習
+                if (hadCandidates && currentReading.isNotEmpty()) {
+                    learningStore.recordSelection(currentReading, committedText)
+                    if (currentRaw.isNotEmpty() && currentRaw != currentReading) {
+                        learningStore.recordSelection(currentRaw, committedText)
+                    }
+                    val compound = compoundWordSplitter.split(currentRaw)
+                    if (compound != null && committedText.startsWith(compound.english)) {
+                        val jpPart = committedText.removePrefix(compound.english)
+                        if (jpPart.isNotEmpty()) {
+                            learningStore.recordSelection(compound.japaneseKana, jpPart)
+                        }
+                    }
+                }
+
                 try {
                     insertToChat(committedText)
                 } catch (_: Throwable) {
@@ -650,6 +688,8 @@ class MeltypeSession(
             candidates = emptyList()
             selectedCandidateIndex = 0
             skipNextGraveChar = false
+            activeReading = ""
+            activeRaw = ""
         }
     }
 }
