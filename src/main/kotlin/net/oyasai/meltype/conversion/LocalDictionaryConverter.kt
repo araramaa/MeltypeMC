@@ -38,7 +38,19 @@ class LocalDictionaryConverter : IConverter {
             "きん" to listOf("金", "きん"),
             "いし" to listOf("石", "いし"),
             "き" to listOf("木", "気", "き"),
-            "拠点" to listOf("拠点", "きょてん")
+            "拠点" to listOf("拠点", "きょてん"),
+            "きょうは" to listOf("今日は", "きょうは"),
+            "さがそう" to listOf("探そう", "さがそう"),
+            "をさがそう" to listOf("を探そう", "をさがそう"),
+            "ほりにいこう" to listOf("掘りに行こう", "ほりに行こう"),
+            "をほりにいこう" to listOf("を掘りに行こう", "をほりにいこう"),
+            "を" to listOf("を"),
+            "が" to listOf("が"),
+            "は" to listOf("は"),
+            "の" to listOf("の"),
+            "に" to listOf("に"),
+            "で" to listOf("で"),
+            "と" to listOf("と")
         )
     }
 

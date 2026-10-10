@@ -14,7 +14,8 @@ class MeltypeSession(
     private val englishDetector: EnglishDetector,
     private val scoreEngine: ScoreEngine,
     private val slashCommandGate: SlashCommandGate,
-    private val converter: IConverter = GoogleCgiConverter()
+    private val converter: IConverter = GoogleCgiConverter(),
+    private val compoundWordSplitter: CompoundWordSplitter = CompoundWordSplitter(englishDetector, romajiDetector)
 ) {
 
     private val lock = Any()
@@ -273,6 +274,14 @@ class MeltypeSession(
                         return true
                     }
 
+                    // ★英単語＋助詞/日本語の複合語判定（例: "diamondwosagasou"）
+                    // 英単語の直後に助詞が連続している場合は、即時英語確定ではなく複合語変換を行う
+                    val compound = compoundWordSplitter.split(currentRaw)
+                    if (compound != null) {
+                        triggerCompoundConversion(compound, currentRaw)
+                        return true
+                    }
+
                     // 単語の英日判定（スペース押下時に即時同期判定）
                     val eval = scoreEngine.evaluate(currentRaw, isFinal = true)
 
@@ -390,8 +399,19 @@ class MeltypeSession(
             previewKana = text.split(' ').joinToString(" ") { token ->
                 if (token.isEmpty()) ""
                 else if (englishDetector.isWord(token)) token
-                else romajiDetector.toKanaLenient(token)
+                else {
+                    val compound = compoundWordSplitter.split(token)
+                    if (compound != null) "${compound.english} ${compound.japaneseKana}"
+                    else romajiDetector.toKanaLenient(token)
+                }
             }
+            return
+        }
+
+        // 英単語＋日本語の複合語判定（例: "diamondwosagasou" -> "diamond をさがそう"）
+        val compound = compoundWordSplitter.split(text)
+        if (compound != null) {
+            previewKana = "${compound.english} ${compound.japaneseKana}"
             return
         }
 
@@ -422,7 +442,14 @@ class MeltypeSession(
             return
         }
 
-        // 2. 単一単語の処理
+        // 2. 英単語＋助詞/日本語の複合語（例: "diamondwosagasou" -> "diamondを探そう"）の処理
+        val compound = compoundWordSplitter.split(raw)
+        if (compound != null) {
+            triggerCompoundConversion(compound, raw)
+            return
+        }
+
+        // 3. 単一単語の処理
         val eval = try {
             scoreEngine.evaluate(raw, isFinal = true)
         } catch (_: Throwable) {
@@ -464,6 +491,33 @@ class MeltypeSession(
     }
 
     /**
+     * 英単語＋助詞/日本語の複合語（例: "diamondwosagasou"）を変換
+     * 英単語（"diamond"）は保護し、日本語部分（"wosagasou" -> "を探そう"）のみを変換して結合
+     */
+    private fun triggerCompoundConversion(compound: CompoundSplit, raw: String) {
+        val initialKana = "${compound.english}${compound.japaneseKana}"
+        candidates = listOf(initialKana, raw)
+        selectedCandidateIndex = 0
+
+        converter.convertAsync(compound.japaneseKana).thenAccept { resultList ->
+            synchronized(lock) {
+                if (rawBuffer.isNotEmpty()) {
+                    val list = resultList.take(MeltypeConfig.maxCandidates)
+                        .map { "${compound.english}$it" }
+                        .toMutableList()
+                    if (!list.contains(initialKana)) list.add(initialKana)
+                    if (!list.contains(raw)) list.add(raw)
+
+                    candidates = list
+                    selectedCandidateIndex = 0
+                }
+            }
+        }.exceptionally {
+            null
+        }
+    }
+
+    /**
      * スペース区切りハイブリッド文（例: "kyouha diamond wo sagasou"）の変換
      * 英単語は英語のまま保護し、日本語トークンのみを変換して結合する
      */
@@ -474,15 +528,24 @@ class MeltypeSession(
         val immediateSentence = tokens.joinToString(" ") { token ->
             if (token.isEmpty()) ""
             else if (englishDetector.isWord(token)) token
-            else romajiDetector.toKanaLenient(token)
+            else {
+                val compound = compoundWordSplitter.split(token)
+                if (compound != null) "${compound.english}${compound.japaneseKana}"
+                else romajiDetector.toKanaLenient(token)
+            }
         }
         candidates = listOf(immediateSentence, rawSentence)
         selectedCandidateIndex = 0
 
-        // 日本語部分のみを変換対象として抽出
-        // 全文を Google CGI に送る前に、各トークンごとに変換または保護を行う
+        // 各トークンごとに変換（複合語、英単語、日本語をそれぞれ最適処理）
         val convertedTokensFutures = tokens.map { token ->
-            if (token.isEmpty() || englishDetector.isWord(token) || scoreEngine.evaluate(token, isFinal = true).verdict == Verdict.ENGLISH) {
+            val compound = compoundWordSplitter.split(token)
+            if (compound != null) {
+                converter.convertAsync(compound.japaneseKana).thenApply { res ->
+                    val best = res.firstOrNull() ?: compound.japaneseKana
+                    listOf("${compound.english}$best")
+                }.exceptionally { listOf("${compound.english}${compound.japaneseKana}") }
+            } else if (token.isEmpty() || englishDetector.isWord(token) || scoreEngine.evaluate(token, isFinal = true).verdict == Verdict.ENGLISH) {
                 java.util.concurrent.CompletableFuture.completedFuture(listOf(token))
             } else {
                 val kana = romajiDetector.toKanaLenient(token)
@@ -516,15 +579,21 @@ class MeltypeSession(
             val committedText = when {
                 hasCandidates -> candidates.getOrNull(selectedCandidateIndex) ?: candidates.firstOrNull() ?: previewKana
                 previewKana.isNotEmpty() -> {
-                    val eval = try {
-                        scoreEngine.evaluate(rawBuffer.toString(), isFinal = true)
-                    } catch (_: Throwable) {
-                        DetectionResult(Verdict.JAPANESE, 1, 0, "fallback")
-                    }
-                    if (eval.verdict == Verdict.ENGLISH || englishDetector.isWord(rawBuffer.toString())) {
-                        rawBuffer.toString()
+                    val rawStr = rawBuffer.toString()
+                    val compound = compoundWordSplitter.split(rawStr)
+                    if (compound != null) {
+                        "${compound.english}${compound.japaneseKana}"
                     } else {
-                        previewKana
+                        val eval = try {
+                            scoreEngine.evaluate(rawStr, isFinal = true)
+                        } catch (_: Throwable) {
+                            DetectionResult(Verdict.JAPANESE, 1, 0, "fallback")
+                        }
+                        if (eval.verdict == Verdict.ENGLISH || englishDetector.isWord(rawStr)) {
+                            rawStr
+                        } else {
+                            previewKana
+                        }
                     }
                 }
                 else -> rawBuffer.toString()

@@ -246,4 +246,58 @@ class MeltypeEngineTest {
         session.resetForNewScreen()
         assertEquals(InputMode.DIRECT, session.currentInputMode)
     }
+
+    /**
+     * ユーザー指定の重要新機能:
+     * 英語の後に てにをは の助詞が付いた時、英語と日本語に自動分割
+     * 例: diamondwosagasou -> diamondを探そう
+     */
+    @Test
+    fun testCompoundWordGluedParticles() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val localConverter = net.oyasai.meltype.conversion.LocalDictionaryConverter()
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate,
+            converter = localConverter
+        )
+
+        // HYBRIDモードに設定
+        session.toggleInputMode()
+        assertEquals(InputMode.HYBRID, session.currentInputMode)
+
+        // 1. スペースを挟まずに "diamondwosagasou" と一気にタイプ
+        val input = "diamondwosagasou"
+        for (c in input) {
+            session.onCharTyped(c, "", insertToChat)
+        }
+
+        // 入力中プレビューが "diamond をさがそう" と自動分割されていること！
+        assertEquals("diamond をさがそう", session.previewKana)
+
+        // 2. スペースキーを押して変換
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates)
+
+        // 第1候補が "diamondを探そう" であること！
+        assertEquals("diamondを探そう", session.candidates[0])
+
+        // 3. Enterキーを押して確定
+        session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, insertToChat)
+        assertEquals(1, committed.size)
+        assertEquals("diamondを探そう", committed[0])
+
+        // 4. "applega" -> "appleが" のテスト
+        committed.clear()
+        for (c in "applega") {
+            session.onCharTyped(c, "", insertToChat)
+        }
+        assertEquals("apple が", session.previewKana)
+        session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, insertToChat)
+        assertEquals("appleが", committed[0])
+    }
 }
