@@ -30,8 +30,8 @@ object MeltypeConfig {
     /** チャット画面等を開いた際の初期入力モード（デフォルト: DIRECT = 何もしない時は半角英数字） */
     var initialInputMode: InputMode = InputMode.DIRECT
 
-    /** 前回の入力モードを画面を跨いで記憶するか（false: チャットを開くたびに基本の半角から開始） */
-    var rememberLastInputMode: Boolean = false
+    /** 前回の入力モードを画面を跨いで記憶・固定するか（true: 一度切り替えたら次に押すまでモードを固定） */
+    var rememberLastInputMode: Boolean = true
 
     /** 画面上にモードインジケーター（[Mel] / [A]）を表示するか */
     var showModeIndicator: Boolean = true

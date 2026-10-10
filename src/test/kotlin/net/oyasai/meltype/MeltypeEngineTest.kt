@@ -18,7 +18,7 @@ class MeltypeEngineTest {
     fun setUp() {
         MeltypeConfig.enabled = true
         MeltypeConfig.initialInputMode = InputMode.DIRECT
-        MeltypeConfig.rememberLastInputMode = false
+        MeltypeConfig.rememberLastInputMode = true
 
         romajiDetector = RomajiDetector()
         englishDetector = EnglishDetector.loadFromResource("/dictionaries/english-words.txt")
@@ -213,6 +213,37 @@ class MeltypeEngineTest {
 
         // もう一度押せば DIRECT（半角直接入力）に戻る
         session.onKeyPressed(GLFW.GLFW_KEY_GRAVE_ACCENT, 41, 0, insertToChat)
+        assertEquals(InputMode.DIRECT, session.currentInputMode)
+    }
+
+    @Test
+    fun testModePersistsAcrossScreensUntilToggled() {
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        // 初回は DIRECT（半角英数）
+        assertEquals(InputMode.DIRECT, session.currentInputMode)
+
+        // 切り替えボタンを押して HYBRID（日本語変換）にする
+        session.toggleInputMode()
+        assertEquals(InputMode.HYBRID, session.currentInputMode)
+
+        // チャットを送信・閉じる・別の画面を開く（resetForNewScreen）
+        session.resetForNewScreen()
+
+        // 次にボタンを押すまで HYBRID モードが維持・固定されていること！
+        assertEquals(InputMode.HYBRID, session.currentInputMode)
+
+        // もう一度切り替えボタンを押して DIRECT にする
+        session.toggleInputMode()
+        assertEquals(InputMode.DIRECT, session.currentInputMode)
+
+        // 再び画面を開閉しても DIRECT モードが固定・維持されること！
+        session.resetForNewScreen()
         assertEquals(InputMode.DIRECT, session.currentInputMode)
     }
 }
