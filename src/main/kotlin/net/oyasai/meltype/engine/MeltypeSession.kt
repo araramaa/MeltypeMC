@@ -92,22 +92,34 @@ class MeltypeSession(
         }
     }
 
+    companion object {
+        /** JIS 半角/全角キースキャンコード (10進: 41, 16進: 0x29) */
+        const val SCAN_HANKAKU_ZENKAKU_DEC = 41
+        const val SCAN_HANKAKU_ZENKAKU_HEX = 0x29
+
+        /** JIS 変換キースキャンコード (121) */
+        const val SCAN_HENKAN = 121
+
+        /** JIS 無変換キースキャンコード (123) */
+        const val SCAN_MUHENKAN = 123
+    }
+
     /**
      * 半角/全角キー判定 (JIS スキャンコード 41 / 0x29 / GLFW_KEY_GRAVE_ACCENT / WORLDキー / F12)
      */
     fun isHankakuZenkakuKey(keyCode: Int, scanCode: Int): Boolean {
-        if (scanCode == 41 || scanCode == 0x29) return true
+        if (scanCode == SCAN_HANKAKU_ZENKAKU_DEC || scanCode == SCAN_HANKAKU_ZENKAKU_HEX) return true
         if (keyCode == GLFW.GLFW_KEY_GRAVE_ACCENT) return true
         if (keyCode == GLFW.GLFW_KEY_WORLD_1 || keyCode == GLFW.GLFW_KEY_WORLD_2) return true
         if (keyCode == GLFW.GLFW_KEY_F12) return true
         return false
     }
 
-    /** 変換キー判定 (JIS スキャンコード 121 / 0x79) */
-    fun isHenkanKey(scanCode: Int): Boolean = scanCode == 121
+    /** 変換キー判定 (JIS スキャンコード 121) */
+    fun isHenkanKey(scanCode: Int): Boolean = scanCode == SCAN_HENKAN
 
-    /** 無変換キー判定 (JIS スキャンコード 123 / 0x7B) */
-    fun isMuhenkanKey(scanCode: Int): Boolean = scanCode == 123
+    /** 無変換キー判定 (JIS スキャンコード 123) */
+    fun isMuhenkanKey(scanCode: Int): Boolean = scanCode == SCAN_MUHENKAN
 
     /**
      * 文字入力イベント（charTyped）の処理

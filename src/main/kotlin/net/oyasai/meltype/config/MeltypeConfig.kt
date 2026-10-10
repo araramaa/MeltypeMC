@@ -33,7 +33,7 @@ object MeltypeConfig {
     /** 前回の入力モードを画面を跨いで記憶・固定するか（true: 一度切り替えたら次に押すまでモードを固定） */
     var rememberLastInputMode: Boolean = true
 
-    /** 画面上にモードインジケーター（[Mel] / [A]）を表示するか */
+    /** 画面上にモード切替アイコンボタン（[ A ] / [あ/A]）を表示するか */
     var showModeIndicator: Boolean = true
 
     /**

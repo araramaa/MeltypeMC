@@ -16,41 +16,49 @@ import net.oyasai.meltype.engine.MeltypeSession
 import java.lang.reflect.Field
 
 /**
- * チャット入力欄の先頭に直感的なトグルボタン（[A] / [あ/A]）を描画し、
- * 入力中テキスト（下線プレビュー）および変換候補ウィンドウを描画するレンダラー。
- * Chat Patches の検索バー等の他MODウィジェットとの重なりを完全回避します。
+ * チャット入力欄および各種テキスト入力画面向けのUIレンダラー。
+ *
+ * 主な責務:
+ * 1. チャット入力欄先頭のモード切替アイコンボタン（[ A ] / [あ/A]）の描画とクリック判定
+ * 2. 入力欄 EditBox の自動オフセット（ボタンと入力文字の重なり防止）
+ * 3. 変換候補リストウィンドウの描画（他MODウィジェットとの衝突回避付き）
+ * 4. 入力中ひらがなプレビュー（下線付き）の描画
  */
 object CompositionRenderer {
 
-    // ボタン寸法
+    // --- UI レイアウト寸法定数 ---
     const val BUTTON_WIDTH = 26
     const val BUTTON_HEIGHT = 12
+    private const val CANDIDATE_BOX_HEIGHT = 14
+    private const val TOOLTIP_HEIGHT = 14
 
-    // カラーパレット
-    private const val BG_COLOR = 0xCC000000.toInt()          // 汎用半透明黒
-    private const val HIGHLIGHT_BG = 0x88336699.toInt()      // 選択中ハイライト青
-    private const val TEXT_COLOR = 0xFFFFFFFF.toInt()        // 白文字
-    private const val ACCENT_COLOR = 0xFFFFAA00.toInt()      // オレンジ/金色アクセント
+    // --- カラーパレット定数 ---
+    private const val BG_TRANSPARENT_BLACK = 0xCC000000.toInt()
+    private const val HIGHLIGHT_BLUE = 0x88336699.toInt()
+    private const val COLOR_WHITE = 0xFFFFFFFF.toInt()
+    private const val COLOR_ACCENT_ORANGE = 0xFFFFAA00.toInt()
 
-    // DIRECTモード（半角英数）ボタン色
-    private const val DIRECT_BORDER = 0xFF5A6978.toInt()     // 落ち着いたスレートグレー枠
-    private const val DIRECT_BG = 0xEE181822.toInt()         // ダークグレー背景
-    private const val DIRECT_TEXT = 0xFFC8D0D8.toInt()       // シルバー文字
+    // DIRECTモード（半角英数）ボタンスタイル
+    private const val COLOR_DIRECT_BORDER = 0xFF5A6978.toInt()
+    private const val COLOR_DIRECT_BG = 0xEE181822.toInt()
+    private const val COLOR_DIRECT_TEXT = 0xFFC8D0D8.toInt()
 
-    // HYBRIDモード（日本語変換）ボタン色
-    private const val HYBRID_BORDER = 0xFF00E5A3.toInt()     // 鮮やかなエメラルドグリーン枠
-    private const val HYBRID_BG = 0xEE0B291E.toInt()         // ダークエメラルド背景
-    private const val HYBRID_TEXT = 0xFF55FFAA.toInt()       // エメラルドグリーン文字
+    // HYBRIDモード（日本語変換）ボタンスタイル
+    private const val COLOR_HYBRID_BORDER = 0xFF00E5A3.toInt()
+    private const val COLOR_HYBRID_BG = 0xEE0B291E.toInt()
+    private const val COLOR_HYBRID_TEXT = 0xFF55FFAA.toInt()
 
-    // ホバー時（マウス乗下時）
-    private const val HOVER_BORDER = 0xFFFFFFFF.toInt()      // ピュアホワイト枠
-    private const val HOVER_DIRECT_BG = 0xEE2A2C38.toInt()
-    private const val HOVER_HYBRID_BG = 0xFF144030.toInt()
+    // ホバー時スタイル
+    private const val COLOR_HOVER_BORDER = 0xFFFFFFFF.toInt()
+    private const val COLOR_HOVER_DIRECT_BG = 0xEE2A2C38.toInt()
+    private const val COLOR_HOVER_HYBRID_BG = 0xFF144030.toInt()
 
-    private var chatScreenInputField: Field? = null
+    // リフレクションキャッシュ（スレッドセーフ）
+    @Volatile
+    private var cachedChatInputField: Field? = null
 
     /**
-     * 画面種別に応じたボタンの (X, Y) 座標を算出
+     * 各画面におけるモード切替ボタンの矩形領域 [X, Y, Width, Height] を算出
      */
     fun getButtonBounds(screen: Screen): IntArray {
         val screenWidth = screen.width
@@ -58,21 +66,25 @@ object CompositionRenderer {
         val className = screen.javaClass.name
 
         return when {
+            // チャット画面: 入力欄の先頭（左端 x = 2, y = screenHeight - 14）
             screen is ChatScreen || className.contains("Chat") -> {
-                // チャット画面: チャット入力欄（screenHeight - 14）の先頭（左端 x = 2）
                 intArrayOf(2, screenHeight - 14, BUTTON_WIDTH, BUTTON_HEIGHT)
             }
+            // 金床画面
             screen is AnvilScreen || className.contains("Anvil") -> {
                 val bx = (screenWidth - 176) / 2 + 58
                 val by = (screenHeight - 166) / 2 + 38
                 intArrayOf(bx, by, BUTTON_WIDTH, BUTTON_HEIGHT)
             }
+            // 看板編集画面
             screen is AbstractSignEditScreen || className.contains("Sign") -> {
                 intArrayOf((screenWidth / 2) - 100, screenHeight - 50, BUTTON_WIDTH, BUTTON_HEIGHT)
             }
+            // 本編集画面
             screen is BookEditScreen || className.contains("Book") -> {
                 intArrayOf((screenWidth / 2) - 80, screenHeight - 35, BUTTON_WIDTH, BUTTON_HEIGHT)
             }
+            // フォールバック
             else -> {
                 intArrayOf(2, screenHeight - 14, BUTTON_WIDTH, BUTTON_HEIGHT)
             }
@@ -80,17 +92,20 @@ object CompositionRenderer {
     }
 
     /**
-     * ChatScreen の EditBox をボタンの右側にオフセット（文字とボタンが被らないように自動調整）
+     * チャット入力欄（EditBox）の開始位置をボタンの右側へオフセット
+     * 入力された文字やカーソルがボタンと絶対に重ならないように保護します。
      */
     private fun adjustChatInputOffset(screen: Screen) {
         if (screen !is ChatScreen) return
         try {
-            if (chatScreenInputField == null) {
-                chatScreenInputField = ChatScreen::class.java.declaredFields.firstOrNull {
+            var field = cachedChatInputField
+            if (field == null) {
+                field = ChatScreen::class.java.declaredFields.firstOrNull {
                     EditBox::class.java.isAssignableFrom(it.type)
                 }?.apply { isAccessible = true }
+                cachedChatInputField = field
             }
-            val editBox = chatScreenInputField?.get(screen) as? EditBox ?: return
+            val editBox = field?.get(screen) as? EditBox ?: return
             val targetX = 2 + BUTTON_WIDTH + 2
             val targetWidth = screen.width - targetX - 2
             if (editBox.x != targetX || editBox.width != targetWidth) {
@@ -98,27 +113,27 @@ object CompositionRenderer {
                 editBox.width = targetWidth
             }
         } catch (_: Throwable) {
+            // リフレクション失敗時もゲームクラッシュを防止
         }
     }
 
     /**
-     * 画面上の障害物（Chat Patchesの検索バーなど）を検知し、候補ウィンドウの基準Y座標を算出
+     * 画面上の他MODウィジェット（Chat Patches の検索バー等）を検出し、
+     * 変換候補ウィンドウが被らない安全なY座標を算出
      */
-    private fun getCandidatesBaseY(screen: Screen): Int {
+    private fun getSafeCandidatesBaseY(screen: Screen): Int {
         val screenHeight = screen.height
         val className = screen.javaClass.name
         if (screen !is ChatScreen && !className.contains("Chat")) {
             return screenHeight - 26
         }
 
-        // チャット画面の場合、入力欄の上にある他MODのウィジェット（Chat Patches の検索バーなど）を探索
         var highestObstacleY = screenHeight - 14
         try {
-            val children = screen.children()
-            for (child in children) {
+            for (child in screen.children()) {
                 if (child is AbstractWidget && child.visible) {
                     val cy = child.y
-                    // 入力欄の真上（screenHeight - 50 〜 screenHeight - 14）にあるウィジェットを検知
+                    // 入力欄の真上（下から50px以内）にある障害物ウィジェットを検出
                     if (cy in (screenHeight - 50) until highestObstacleY) {
                         highestObstacleY = minOf(highestObstacleY, cy)
                     }
@@ -130,146 +145,167 @@ object CompositionRenderer {
     }
 
     /**
-     * 現在開いているScreenのフォアグラウンドにボタン、候補ウィンドウ、下線プレビューを描画
+     * フォアグラウンドUI全体のメイン描画メソッド
      */
     fun render(screen: Screen, extractor: GuiGraphicsExtractor, session: MeltypeSession, mouseX: Int = -1, mouseY: Int = -1) {
         if (!MeltypeConfig.enabled) return
 
         try {
-            val client = Minecraft.getInstance()
-            val font = client.font
-            val screenWidth = screen.width
-            val screenHeight = screen.height
-
             // 1. チャット入力欄の自動オフセット
             adjustChatInputOffset(screen)
 
-            // 2. モード切り替えアイコンボタンの描画
-            val bounds = getButtonBounds(screen)
-            val btnX = bounds[0]
-            val btnY = bounds[1]
-            val btnW = bounds[2]
-            val btnH = bounds[3]
-
-            val isHovered = mouseX in btnX..(btnX + btnW) && mouseY in btnY..(btnY + btnH)
-
+            // 2. モード切替アイコンボタンの描画
             if (MeltypeConfig.showModeIndicator) {
-                val mode = session.currentInputMode
-                val iconText = mode.iconText
-
-                val borderColor = when {
-                    isHovered -> HOVER_BORDER
-                    mode == InputMode.HYBRID -> HYBRID_BORDER
-                    else -> DIRECT_BORDER
-                }
-
-                val bgColor = when {
-                    isHovered && mode == InputMode.HYBRID -> HOVER_HYBRID_BG
-                    isHovered -> HOVER_DIRECT_BG
-                    mode == InputMode.HYBRID -> HYBRID_BG
-                    else -> DIRECT_BG
-                }
-
-                val textColor = when {
-                    isHovered -> TEXT_COLOR
-                    mode == InputMode.HYBRID -> HYBRID_TEXT
-                    else -> DIRECT_TEXT
-                }
-
-                // 1pxボーダー付きボタンの描画
-                extractor.fill(btnX, btnY, btnX + btnW, btnY + btnH, borderColor)
-                extractor.fill(btnX + 1, btnY + 1, btnX + btnW - 1, btnY + btnH - 1, bgColor)
-
-                // アイコンテキストの中央揃え描画
-                val textW = font.width(iconText)
-                val textX = btnX + (btnW - textW) / 2
-                val textY = btnY + (btnH - 8) / 2
-                extractor.textRenderer().accept(textX, textY, Component.literal(iconText).withColor(textColor))
-
-                // マウスホバー時のツールチップ（説明表示）
-                if (isHovered) {
-                    val tooltipText = when (mode) {
-                        InputMode.DIRECT -> "半角英数 (クリックで日本語に切替)"
-                        InputMode.HYBRID -> "日本語変換 (クリックで半角に切替)"
-                    }
-                    val ttW = font.width(tooltipText) + 8
-                    val ttH = 14
-                    val ttX = btnX.coerceAtMost(screenWidth - ttW - 4)
-                    val ttY = (btnY - ttH - 2).coerceAtLeast(2)
-
-                    extractor.fill(ttX, ttY, ttX + ttW, ttY + ttH, 0xF0101015.toInt())
-                    extractor.fill(ttX, ttY, ttX + ttW, ttY + 1, borderColor)
-                    extractor.textRenderer().accept(ttX + 4, ttY + 3, Component.literal(tooltipText).withColor(0xFFE0E0E0.toInt()))
-                }
+                renderModeButton(screen, extractor, session, mouseX, mouseY)
             }
 
-            // 変換中（isComposing）でなければ以降の描画は不要
+            // 変換中（isComposing）でなければ候補やプレビューの描画は不要
             if (!session.isComposing) return
 
-            // 3. 変換候補リストの描画（障害物検知で検索バーとも被らない）
-            val obstacleY = getCandidatesBaseY(screen)
+            val obstacleY = getSafeCandidatesBaseY(screen)
 
+            // 3. 変換候補リストの描画
             if (session.hasCandidates) {
-                val candidates = session.candidates
-                if (candidates.isNotEmpty()) {
-                    val candidateTexts = candidates.mapIndexed { idx, cand ->
-                        val num = idx + 1
-                        val prefix = if (idx == session.selectedCandidateIndex) "▶ $num." else "  $num."
-                        "$prefix $cand "
-                    }
-
-                    var totalWidth = 8
-                    for (text in candidateTexts) {
-                        totalWidth += font.width(text) + 4
-                    }
-                    val boxHeight = 14
-                    val boxY = obstacleY - boxHeight - 2
-
-                    val safeX = 4.coerceIn(2, maxOf(2, screenWidth - totalWidth - 2))
-
-                    // 背景ボックス
-                    extractor.fill(safeX, boxY, safeX + totalWidth, boxY + boxHeight, BG_COLOR)
-
-                    // 各候補の描画
-                    var curX = safeX + 4
-                    for ((idx, text) in candidateTexts.withIndex()) {
-                        val itemWidth = font.width(text)
-                        val isSelected = idx == session.selectedCandidateIndex
-
-                        if (isSelected) {
-                            extractor.fill(curX - 2, boxY + 1, curX + itemWidth + 2, boxY + boxHeight - 1, HIGHLIGHT_BG)
-                        }
-
-                        val color = if (isSelected) ACCENT_COLOR else TEXT_COLOR
-                        val comp = Component.literal(text).withColor(color)
-                        extractor.textRenderer().accept(curX, boxY + 3, comp)
-                        curX += itemWidth + 4
-                    }
-                }
+                renderCandidatesList(screen, extractor, session, obstacleY)
             }
 
             // 4. 入力中ひらがなプレビュー（下線付き）の描画
-            val preview = session.previewKana.ifEmpty { session.rawBuffer.toString() }
-            if (preview.isNotEmpty()) {
-                val previewText = "変換中: $preview"
-                val textWidth = font.width(previewText)
-                val previewY = if (session.hasCandidates) obstacleY - 32 else obstacleY - 16
-                val safeX = 4.coerceIn(2, maxOf(2, screenWidth - textWidth - 8))
-
-                // 背景
-                extractor.fill(safeX, previewY - 2, safeX + textWidth + 8, previewY + 11, BG_COLOR)
-                // テキスト
-                extractor.textRenderer().accept(safeX + 4, previewY, Component.literal(previewText).withColor(ACCENT_COLOR))
-                // 下線
-                extractor.fill(safeX + 4, previewY + 10, safeX + 4 + textWidth, previewY + 11, ACCENT_COLOR)
-            }
+            renderUnderlinePreview(screen, extractor, session, obstacleY)
         } catch (_: Throwable) {
-            // 描画エラー時もゲームを落とさないフェイルセーフ保護
+            // レンダリング例外時もゲーム本体のクラッシュを絶対に防止するフェイルセーフ
         }
     }
 
     /**
-     * マウスクリック位置がモード切替ボタン上にあるかを判定
+     * モード切替アイコンボタンおよびホバーツールチップを描画
+     */
+    private fun renderModeButton(screen: Screen, extractor: GuiGraphicsExtractor, session: MeltypeSession, mouseX: Int, mouseY: Int) {
+        val client = Minecraft.getInstance()
+        val font = client.font
+        val bounds = getButtonBounds(screen)
+        val btnX = bounds[0]
+        val btnY = bounds[1]
+        val btnW = bounds[2]
+        val btnH = bounds[3]
+
+        val isHovered = mouseX in btnX..(btnX + btnW) && mouseY in btnY..(btnY + btnH)
+        val mode = session.currentInputMode
+        val iconText = mode.iconText
+
+        val borderColor = when {
+            isHovered -> COLOR_HOVER_BORDER
+            mode == InputMode.HYBRID -> COLOR_HYBRID_BORDER
+            else -> COLOR_DIRECT_BORDER
+        }
+
+        val bgColor = when {
+            isHovered && mode == InputMode.HYBRID -> COLOR_HOVER_HYBRID_BG
+            isHovered -> COLOR_HOVER_DIRECT_BG
+            mode == InputMode.HYBRID -> COLOR_HYBRID_BG
+            else -> COLOR_DIRECT_BG
+        }
+
+        val textColor = when {
+            isHovered -> COLOR_WHITE
+            mode == InputMode.HYBRID -> COLOR_HYBRID_TEXT
+            else -> COLOR_DIRECT_TEXT
+        }
+
+        // ボタン枠（1pxボーダー）と背景
+        extractor.fill(btnX, btnY, btnX + btnW, btnY + btnH, borderColor)
+        extractor.fill(btnX + 1, btnY + 1, btnX + btnW - 1, btnY + btnH - 1, bgColor)
+
+        // 中央揃えテキスト
+        val textW = font.width(iconText)
+        val textX = btnX + (btnW - textW) / 2
+        val textY = btnY + (btnH - 8) / 2
+        extractor.textRenderer().accept(textX, textY, Component.literal(iconText).withColor(textColor))
+
+        // ホバーツールチップ
+        if (isHovered) {
+            val tooltipText = when (mode) {
+                InputMode.DIRECT -> "半角英数 (クリックで日本語に切替)"
+                InputMode.HYBRID -> "日本語変換 (クリックで半角に切替)"
+            }
+            val ttW = font.width(tooltipText) + 8
+            val ttX = btnX.coerceAtMost(screen.width - ttW - 4)
+            val ttY = (btnY - TOOLTIP_HEIGHT - 2).coerceAtLeast(2)
+
+            extractor.fill(ttX, ttY, ttX + ttW, ttY + TOOLTIP_HEIGHT, 0xF0101015.toInt())
+            extractor.fill(ttX, ttY, ttX + ttW, ttY + 1, borderColor)
+            extractor.textRenderer().accept(ttX + 4, ttY + 3, Component.literal(tooltipText).withColor(0xFFE0E0E0.toInt()))
+        }
+    }
+
+    /**
+     * 変換候補リストウィンドウを描画
+     */
+    private fun renderCandidatesList(screen: Screen, extractor: GuiGraphicsExtractor, session: MeltypeSession, obstacleY: Int) {
+        val candidates = session.candidates
+        if (candidates.isEmpty()) return
+
+        val client = Minecraft.getInstance()
+        val font = client.font
+        val screenWidth = screen.width
+
+        val candidateTexts = candidates.mapIndexed { idx, cand ->
+            val num = idx + 1
+            val prefix = if (idx == session.selectedCandidateIndex) "▶ $num." else "  $num."
+            "$prefix $cand "
+        }
+
+        var totalWidth = 8
+        for (text in candidateTexts) {
+            totalWidth += font.width(text) + 4
+        }
+        val boxY = obstacleY - CANDIDATE_BOX_HEIGHT - 2
+        val safeX = 4.coerceIn(2, maxOf(2, screenWidth - totalWidth - 2))
+
+        // 背景ボックス
+        extractor.fill(safeX, boxY, safeX + totalWidth, boxY + CANDIDATE_BOX_HEIGHT, BG_TRANSPARENT_BLACK)
+
+        // 各候補の描画
+        var curX = safeX + 4
+        for ((idx, text) in candidateTexts.withIndex()) {
+            val itemWidth = font.width(text)
+            val isSelected = idx == session.selectedCandidateIndex
+
+            if (isSelected) {
+                extractor.fill(curX - 2, boxY + 1, curX + itemWidth + 2, boxY + CANDIDATE_BOX_HEIGHT - 1, HIGHLIGHT_BLUE)
+            }
+
+            val color = if (isSelected) COLOR_ACCENT_ORANGE else COLOR_WHITE
+            extractor.textRenderer().accept(curX, boxY + 3, Component.literal(text).withColor(color))
+            curX += itemWidth + 4
+        }
+    }
+
+    /**
+     * 入力中のひらがなプレビュー（下線付き）を描画
+     */
+    private fun renderUnderlinePreview(screen: Screen, extractor: GuiGraphicsExtractor, session: MeltypeSession, obstacleY: Int) {
+        val preview = session.previewKana.ifEmpty { session.rawBuffer.toString() }
+        if (preview.isEmpty()) return
+
+        val client = Minecraft.getInstance()
+        val font = client.font
+        val screenWidth = screen.width
+
+        val previewText = "変換中: $preview"
+        val textWidth = font.width(previewText)
+        val previewY = if (session.hasCandidates) obstacleY - 32 else obstacleY - 16
+        val safeX = 4.coerceIn(2, maxOf(2, screenWidth - textWidth - 8))
+
+        // 背景
+        extractor.fill(safeX, previewY - 2, safeX + textWidth + 8, previewY + 11, BG_TRANSPARENT_BLACK)
+        // テキスト
+        extractor.textRenderer().accept(safeX + 4, previewY, Component.literal(previewText).withColor(COLOR_ACCENT_ORANGE))
+        // 下線
+        extractor.fill(safeX + 4, previewY + 10, safeX + 4 + textWidth, previewY + 11, COLOR_ACCENT_ORANGE)
+    }
+
+    /**
+     * マウスクリック位置がモード切替ボタン上にあるかを安全に判定
      */
     fun isIndicatorClicked(screen: Screen, mouseX: Double, mouseY: Double): Boolean {
         if (!MeltypeConfig.showModeIndicator) return false
@@ -280,7 +316,7 @@ object CompositionRenderer {
             val btnW = bounds[2]
             val btnH = bounds[3]
 
-            // 判定マージンを持たせて快適にクリック可能
+            // 快適なクリックのため2pxのマージンを付与
             return mouseX >= (btnX - 2) && mouseX <= (btnX + btnW + 2) &&
                    mouseY >= (btnY - 2) && mouseY <= (btnY + btnH + 2)
         } catch (_: Throwable) {
