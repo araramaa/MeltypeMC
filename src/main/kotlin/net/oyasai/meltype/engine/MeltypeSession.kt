@@ -130,16 +130,16 @@ class MeltypeSession(
         if (!MeltypeConfig.enabled) return false
 
         synchronized(lock) {
-            // 半角/全角キー押下直後のバッククォート/チルダ文字等の誤入力を抑止
+            // 半角/全角キー押下直後のバッククォート文字等の誤入力を抑止（~ は記号として有効なため除外）
             if (skipNextGraveChar) {
                 skipNextGraveChar = false
-                if (c == '`' || c == '~' || c == '｀' || c == '\u0000') {
+                if (c == '`' || c == '｀' || c == '\u0000') {
                     return true
                 }
             }
 
-            // 半角/全角キー（バッククォート）が charTyped として飛んできた場合の完全救済（OSにキーイベントが吸われた環境対応）
-            if (c == '`' || c == '~' || c == '｀') {
+            // 半角/全角キー（バッククォート）が charTyped として飛んできた場合の完全救済（~ は記号として有効なため除外）
+            if (c == '`' || c == '｀') {
                 toggleInputMode(insertToChat)
                 return true
             }
@@ -181,13 +181,13 @@ class MeltypeSession(
             }
 
             // 4. 日本語入力中の句読点・記号（確定させずにバッファに保持して文の入力を継続）
-            if (isComposing && (c == ',' || c == '.' || c == '?' || c == '!' || c == '~')) {
+            if (isComposing && (c == ',' || c == '.' || c == '?' || c == '!' || c == '~' || c == '～' || c == '〜')) {
                 val punctuation = when (c) {
                     ',' -> "、"
                     '.' -> "。"
                     '?' -> "？"
                     '!' -> "！"
-                    '~' -> "〜"
+                    '~', '～', '〜' -> "～"
                     else -> c.toString()
                 }
                 rawBuffer.append(punctuation)
@@ -195,7 +195,13 @@ class MeltypeSession(
                 return true
             }
 
-            // 5. 英字以外の記号や数字が入力された場合
+            // 5. 非変換中（バッファが空）での波線記号入力（HYBRIDモード時は全角「～」を直接挿入）
+            if (!isComposing && (c == '~' || c == '～' || c == '〜')) {
+                insertToChat("～")
+                return true
+            }
+
+            // 6. 英字以外の記号や数字が入力された場合
             if (isComposing) {
                 commitCurrent(insertToChat)
                 insertToChat(c.toString())
@@ -214,8 +220,22 @@ class MeltypeSession(
         if (!MeltypeConfig.enabled) return false
 
         synchronized(lock) {
+            // 0. Shift + F12 による「～」記号の入力（ユーザー要望）
+            val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
+            if (shift && keyCode == GLFW.GLFW_KEY_F12) {
+                if (isComposing) {
+                    rawBuffer.append("～")
+                    updatePreview()
+                } else {
+                    insertToChat("～")
+                }
+                return true
+            }
+
             // 1. 半角/全角キーによるモード切り替え（ハイブリッド ↔ 直接入力）
-            if (isHankakuZenkakuKey(keyCode, scanCode)) {
+            // Shift等の修飾キーが押されていない単独キー押下時のみモード切り替えを行う
+            val noModifiers = (modifiers and (GLFW.GLFW_MOD_SHIFT or GLFW.GLFW_MOD_CONTROL or GLFW.GLFW_MOD_ALT)) == 0
+            if (noModifiers && isHankakuZenkakuKey(keyCode, scanCode)) {
                 skipNextGraveChar = true
                 toggleInputMode(insertToChat)
                 return true

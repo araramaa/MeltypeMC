@@ -300,4 +300,67 @@ class MeltypeEngineTest {
         session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, insertToChat)
         assertEquals("appleが", committed[0])
     }
+
+    /**
+     * Shift+F12 および波線記号（~ / ～）の入力テスト
+     */
+    @Test
+    fun testShiftF12AndTildeHandling() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        // 1. DIRECTモード（非変換中）で Shift+F12 を押すと即座に「～」が挿入されること
+        assertEquals(InputMode.DIRECT, session.currentInputMode)
+        val handledShiftF12Direct = session.onKeyPressed(GLFW.GLFW_KEY_F12, 0, GLFW.GLFW_MOD_SHIFT, insertToChat)
+        assertTrue(handledShiftF12Direct)
+        assertEquals(listOf("～"), committed)
+
+        // 2. HYBRIDモードに切り替え
+        session.toggleInputMode()
+        assertEquals(InputMode.HYBRID, session.currentInputMode)
+        committed.clear()
+
+        // 3. HYBRIDモード（非変換中）で Shift+F12 を押すと「～」が挿入されること
+        val handledShiftF12Hybrid = session.onKeyPressed(GLFW.GLFW_KEY_F12, 0, GLFW.GLFW_MOD_SHIFT, insertToChat)
+        assertTrue(handledShiftF12Hybrid)
+        assertEquals(listOf("～"), committed)
+
+        // 4. HYBRIDモードで文字入力中（"arigatou"）に Shift+F12 を押すと、プレビュー末尾に「～」が追加されること
+        committed.clear()
+        for (c in "arigatou") {
+            session.onCharTyped(c, "", insertToChat)
+        }
+        assertEquals("ありがとう", session.previewKana)
+        session.onKeyPressed(GLFW.GLFW_KEY_F12, 0, GLFW.GLFW_MOD_SHIFT, insertToChat)
+        assertEquals("ありがとう～", session.previewKana)
+
+        // Enterで「ありがとう～」が確定されること
+        session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, insertToChat)
+        assertEquals(listOf("ありがとう～"), committed)
+
+        // 5. HYBRIDモードで通常タイピングによる波線記号 ('~') の入力
+        committed.clear()
+        // 非変換中の '~' は直接全角「～」として挿入されること（モード切替にならず記号として出力）
+        val handledTildeDirect = session.onCharTyped('~', "", insertToChat)
+        assertTrue(handledTildeDirect)
+        assertEquals(listOf("～"), committed)
+        assertEquals(InputMode.HYBRID, session.currentInputMode) // モードが勝手に切り替わっていないこと
+
+        // 変換中の '~' はバッファに全角「～」として蓄積されること
+        committed.clear()
+        for (c in "ikuyo") {
+            session.onCharTyped(c, "", insertToChat)
+        }
+        session.onCharTyped('~', "", insertToChat)
+        assertEquals("いくよ～", session.previewKana)
+        session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, insertToChat)
+        assertEquals(listOf("いくよ～"), committed)
+    }
 }
