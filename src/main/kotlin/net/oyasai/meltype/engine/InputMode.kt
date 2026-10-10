@@ -4,15 +4,15 @@ package net.oyasai.meltype.engine
  * キーボード入力モード
  */
 enum class InputMode(val displayName: String, val badge: String) {
-    /** 半角英数字モード（バニラ直接入力） */
-    ENGLISH("半角英数", "[A]"),
+    /** ハイブリッド自動判別モード（半角/全角キー不要・自動英日打ち分け） */
+    HYBRID("ハイブリッド", "[あ/A]"),
 
-    /** 日本語入力モード（Meltype かな漢字変換） */
-    JAPANESE("日本語", "[あ]");
+    /** 直接入力固定モード（バニラ直接入力） */
+    DIRECT("直接入力", "[A]");
 
     /** モードをトグル（切り替え） */
     fun toggle(): InputMode = when (this) {
-        ENGLISH -> JAPANESE
-        JAPANESE -> ENGLISH
+        HYBRID -> DIRECT
+        DIRECT -> HYBRID
     }
 }

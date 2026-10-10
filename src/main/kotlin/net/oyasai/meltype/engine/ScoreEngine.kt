@@ -65,6 +65,14 @@ class ScoreEngine(
         // 2. 英語辞書解析
         englishScore += englishDetector.evaluate(letters)
 
+        // ★最重要: 3文字以上で英単語辞書に完全一致する場合、ローマ字偶然一致（例: diamond -> ぢあもんd）を排して英語を確定！
+        if (letters.length >= 3 && englishDetector.isWord(letters)) {
+            // 日本語としての強い特徴（拗音・促音等）がなければ英語
+            if (analysis.strongYouon == 0 && analysis.tsu == 0 && analysis.sokuon == 0) {
+                return DetectionResult(Verdict.ENGLISH, japaneseScore, englishScore + 10, "英単語辞書完全一致")
+            }
+        }
+
         val threshold = MeltypeConfig.japaneseThreshold
 
         // 3. 判定ロジック

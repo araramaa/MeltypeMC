@@ -27,13 +27,13 @@ object MeltypeConfig {
     /** タイポ自動補正を有効にするか */
     var typoCorrectionEnabled: Boolean = true
 
-    /** チャット画面等を開いた際の初期入力モード（デフォルト: 半角英数） */
-    var initialInputMode: InputMode = InputMode.ENGLISH
+    /** チャット画面等を開いた際の初期入力モード（デフォルト: HYBRID = 自動英日ハイブリッド入力） */
+    var initialInputMode: InputMode = InputMode.HYBRID
 
-    /** 前回の入力モードを画面を跨いで記憶するか（デフォルト: false = チャットを開くたびに半角英数から開始） */
+    /** 前回の入力モードを画面を跨いで記憶するか */
     var rememberLastInputMode: Boolean = false
 
-    /** 画面上にモードインジケーター（[あ] / [A]）を表示するか */
+    /** 画面上にモードインジケーター（[Mel] / [A]）を表示するか */
     var showModeIndicator: Boolean = true
 
     /**

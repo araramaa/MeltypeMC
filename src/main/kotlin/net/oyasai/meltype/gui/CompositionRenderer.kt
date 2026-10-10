@@ -55,8 +55,8 @@ object CompositionRenderer {
                 val badgeHeight = 11
                 val badgeY = baseY
 
-                // 日本語モード時は金色アクセント、半角英数時は控えめなグレー
-                val badgeTextColor = if (mode == InputMode.JAPANESE) ACCENT_COLOR else DIM_COLOR
+                // ハイブリッド自動判別モード時は金色アクセント、直接入力時は控えめなグレー
+                val badgeTextColor = if (mode == InputMode.HYBRID) ACCENT_COLOR else DIM_COLOR
 
                 extractor.fill(baseX, badgeY - 2, baseX + indicatorWidth, badgeY + badgeHeight, BG_COLOR)
                 extractor.textRenderer().accept(baseX + 3, badgeY, Component.literal(badgeText).withColor(badgeTextColor))

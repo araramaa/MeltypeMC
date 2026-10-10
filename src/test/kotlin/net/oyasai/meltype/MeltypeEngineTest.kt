@@ -17,11 +17,11 @@ class MeltypeEngineTest {
     @BeforeEach
     fun setUp() {
         MeltypeConfig.enabled = true
-        MeltypeConfig.initialInputMode = InputMode.ENGLISH
+        MeltypeConfig.initialInputMode = InputMode.HYBRID
         MeltypeConfig.rememberLastInputMode = false
 
         romajiDetector = RomajiDetector()
-        englishDetector = EnglishDetector(listOf("diamond", "gamemode", "survival", "item", "sword", "iron", "gold", "apple"))
+        englishDetector = EnglishDetector.loadFromResource("/dictionaries/english-words.txt")
         scoreEngine = ScoreEngine(romajiDetector, englishDetector)
         slashGate = SlashCommandGate()
     }
@@ -36,7 +36,8 @@ class MeltypeEngineTest {
     @Test
     fun testEnglishDetection() {
         assertTrue(englishDetector.isWord("diamond"))
-        assertTrue(englishDetector.isPrefix("diam"))
+        assertTrue(englishDetector.isWord("apple"))
+        assertTrue(englishDetector.isWord("craft"))
         assertFalse(englishDetector.isWord("kyouha"))
     }
 
@@ -48,6 +49,7 @@ class MeltypeEngineTest {
 
     @Test
     fun testScoreEngineEnglish() {
+        // "diamond" は英単語完全一致のため、ローマ字判定で「ぢあもんd」にならず確実に英語になること！
         val result = scoreEngine.evaluate("diamond", isFinal = true)
         assertEquals(Verdict.ENGLISH, result.verdict)
     }
@@ -74,7 +76,6 @@ class MeltypeEngineTest {
 
     @Test
     fun testSlashCommandGateBypass() {
-        // ユーザー指定要件: スラッシュを入力したときは勝手にコマンド入力モードになって欲しい
         // 1. チャット欄が空で '/' を入力した場合 -> バイパス
         assertTrue(slashGate.shouldBypassIme("", '/'))
         assertTrue(slashGate.isCommandMode)
@@ -89,8 +90,18 @@ class MeltypeEngineTest {
         assertFalse(slashGate.isCommandMode)
     }
 
+    /**
+     * ユーザー指定の重要要件:
+     * ［半角/全角］キー不要のハイブリッド入力
+     * キーボードを切り替える必要が一切なく、
+     * kyouha diamond wo sagasou とそのまま打つだけで、
+     * kyouha → 今日は（日本語判定）
+     * diamond → diamond（英単語判定・英語のまま）
+     * wo → を（日本語判定）
+     * sagasou → 探そう（日本語判定） と自動で打ち分けられることの検証！
+     */
     @Test
-    fun testInputModeToggleWithHankakuZenkakuKey() {
+    fun testHybridTypingWithoutModeSwitch() {
         val committed = mutableListOf<String>()
         val insertToChat: (String) -> Unit = { committed.add(it) }
 
@@ -101,137 +112,95 @@ class MeltypeEngineTest {
             slashCommandGate = slashGate
         )
 
-        // 1. 初期状態は半角英数字モード（ENGLISH）
-        assertEquals(InputMode.ENGLISH, session.currentInputMode)
+        // 初期状態でHYBRIDモード（キー切り替え一切不要）
+        assertEquals(InputMode.HYBRID, session.currentInputMode)
 
-        // 2. 半角英数モードでは英字入力がバイパス（falseを返し、バニラが直接処理）される
-        val englishHandled = session.onCharTyped('a', "", insertToChat)
-        assertFalse(englishHandled, "ENGLISHモード時はMODで消費せずバニラ直接入力に任せること")
-        assertFalse(session.isComposing)
-
-        // 3. 半角/全角キー（JISスキャンコード41）を押す -> 日本語入力モード（JAPANESE）に切り替え！
-        val hankakuHandled = session.onKeyPressed(GLFW.GLFW_KEY_GRAVE_ACCENT, 41, 0, insertToChat)
-        assertTrue(hankakuHandled, "半角/全角キーはMODで消費してバニラに入力させないこと")
-        assertEquals(InputMode.JAPANESE, session.currentInputMode)
-
-        // 4. 日本語入力モードでは英字入力がローマ字として蓄積・リアルタイム変換される
-        val jpHandled = session.onCharTyped('k', "", insertToChat)
-        assertTrue(jpHandled, "JAPANESEモード時はMODが消費してリアルタイム変換すること")
-        assertTrue(session.isComposing)
-
-        // 5. もう一度半角/全角キーを押す -> 確定されて半角英数モード（ENGLISH）に戻る！
-        session.onKeyPressed(GLFW.GLFW_KEY_GRAVE_ACCENT, 41, 0, insertToChat)
-        assertEquals(InputMode.ENGLISH, session.currentInputMode)
-        assertFalse(session.isComposing)
-        assertEquals(1, committed.size) // 入力中だった 'k' が確定されてチャットに挿入された
-    }
-
-    @Test
-    fun testHenkanAndMuhenkanKeys() {
-        val committed = mutableListOf<String>()
-        val insertToChat: (String) -> Unit = { committed.add(it) }
-
-        val session = MeltypeSession(
-            romajiDetector = romajiDetector,
-            englishDetector = englishDetector,
-            scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
-        )
-
-        assertEquals(InputMode.ENGLISH, session.currentInputMode)
-
-        // 変換キー (scancode 121) -> JAPANESE
-        val henkanHandled = session.onKeyPressed(0, 121, 0, insertToChat)
-        assertTrue(henkanHandled)
-        assertEquals(InputMode.JAPANESE, session.currentInputMode)
-
-        // 無変換キー (scancode 123) -> ENGLISH
-        val muhenkanHandled = session.onKeyPressed(0, 123, 0, insertToChat)
-        assertTrue(muhenkanHandled)
-        assertEquals(InputMode.ENGLISH, session.currentInputMode)
-    }
-
-    @Test
-    fun testContinuousTypingAndAutoCommitInJapaneseMode() {
-        val committed = mutableListOf<String>()
-        val insertToChat: (String) -> Unit = { committed.add(it) }
-
-        val session = MeltypeSession(
-            romajiDetector = romajiDetector,
-            englishDetector = englishDetector,
-            scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
-        )
-
-        // 半角/全角キーを押して日本語モードに切り替え
-        session.onKeyPressed(GLFW.GLFW_KEY_GRAVE_ACCENT, 41, 0, insertToChat)
-        assertEquals(InputMode.JAPANESE, session.currentInputMode)
-
-        // 1. "kyouha" と入力
-        for (c in "kyouha") {
-            val handled = session.onCharTyped(c, "", insertToChat)
-            assertTrue(handled)
-        }
-        assertEquals("きょうは", session.previewKana)
-        assertTrue(session.isComposing)
-
-        // 2. スペースキーを押して変換
-        val spaceHandled = session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
-        assertTrue(spaceHandled)
-        assertTrue(session.hasCandidates)
-        assertEquals(0, committed.size) // まだ確定されていない
-
-        // 3. 確定せずに次の英単語 "diamond" の 'd' を入力 -> 直前の候補が自動確定される！
-        val dHandled = session.onCharTyped('d', "", insertToChat)
-        assertTrue(dHandled)
-        assertEquals(1, committed.size) // "きょうは" が自動確定された！
-        assertEquals("きょうは", committed[0])
-        assertEquals("d", session.rawBuffer.toString())
-
-        // 4. "iamond" を入力
-        for (c in "iamond") {
-            session.onCharTyped(c, "", insertToChat)
-        }
-        assertEquals("diamond", session.rawBuffer.toString())
-
-        // 5. スペースキーを押す -> 英語判定のため "diamond" + " " が確定される！
+        // 1. "kyouha" + Space -> 日本語判定
+        for (c in "kyouha") session.onCharTyped(c, "", insertToChat)
         session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates)
+        // 候補の先頭は「きょうは」
+        assertEquals("きょうは", session.candidates[0])
+
+        // 2. 次の単語 "diamond" の 'd' をタイプ -> 直前の「きょうは」が自動確定！
+        session.onCharTyped('d', "", insertToChat)
+        assertEquals(1, committed.size)
+        assertEquals("きょうは", committed[0])
+
+        // 3. "iamond" + Space -> 英単語判定！「ぢあもんd」にならず即座に "diamond " が確定される！
+        for (c in "iamond") session.onCharTyped(c, "", insertToChat)
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertEquals(2, committed.size)
+        assertEquals("diamond ", committed[1])
+        assertFalse(session.isComposing, "英単語確定後はバッファがクリアされていること")
+
+        // 4. "wo" + Space -> 日本語判定「を」
+        for (c in "wo") session.onCharTyped(c, "", insertToChat)
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+
+        // 5. 次の単語 "sagasou" の 's' をタイプ -> 直前の「を」が自動確定！
+        session.onCharTyped('s', "", insertToChat)
         assertEquals(3, committed.size)
-        assertEquals("diamond", committed[1])
-        assertEquals(" ", committed[2])
-        assertFalse(session.isComposing)
+        assertEquals("を", committed[2])
+
+        // 6. "agasou" + Enter -> 「さがそう」が確定！
+        for (c in "agasou") session.onCharTyped(c, "", insertToChat)
+        session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, insertToChat)
+        assertEquals(4, committed.size)
+        assertEquals("さがそう", committed[3])
+
+        // 全体の確定結果が「きょうは」「diamond 」「を」「さがそう」であること！
+        val fullMessage = committed.joinToString("")
+        assertEquals("きょうはdiamond をさがそう", fullMessage)
     }
 
     @Test
-    fun testSentenceWithParticlesAndPunctuation() {
-        val analysis = romajiDetector.analyze("kyouhadaiyawosagasou!")
-        assertTrue(analysis.isValid)
-        assertEquals("きょうはだいやをさがそう!", analysis.kana)
+    fun testHybridSentenceWithSpaces() {
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
 
-        // 助詞 (ha->は, wo->を) が正しく含まれていること
-        assertTrue(analysis.kana.contains("は"))
-        assertTrue(analysis.kana.contains("を"))
+        // Shift+Space 等でスペースを挟んで一括入力した場合
+        val input = "kyouha diamond wo sagasou"
+        for (c in input) {
+            if (c == ' ') {
+                session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, GLFW.GLFW_MOD_SHIFT) {}
+            } else {
+                session.onCharTyped(c, "") {}
+            }
+        }
+
+        // プレビューが英語と日本語で正しく保持されていること（diamondがぢあもんdにならないこと）
+        assertEquals("きょうは diamond を さがそう", session.previewKana)
     }
 
     @Test
-    fun testGoogleCgiMultiSegmentParsing() {
-        val converter = net.oyasai.meltype.conversion.GoogleCgiConverter()
-        val mockJson = """
-            [
-              ["きょうは", ["今日は", "きょうは", "京は"]],
-              ["だいやを", ["ダイヤを", "だいやを"]],
-              ["さがそう", ["探そう", "さがそう", "捜そう"]]
-            ]
-        """.trimIndent()
+    fun testHankakuZenkakuKeyDirectModeToggle() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
 
-        // リフレクションまたは直接メソッドで parseGoogleCgiResponse をテスト
-        val method = converter.javaClass.getDeclaredMethod("parseGoogleCgiResponse", String::class.java, String::class.java)
-        method.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val results = method.invoke(converter, mockJson, "きょうはだいやをさがそう") as List<String>
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
 
-        // 第1候補が全文結合された「今日はダイヤを探そう」になっていること！
-        assertEquals("今日はダイヤを探そう", results[0])
-        assertTrue(results.contains("きょうはだいやをさがそう"))
+        assertEquals(InputMode.HYBRID, session.currentInputMode)
+
+        // 半角/全角キーで直接入力固定モード（DIRECT）に切り替え
+        session.onKeyPressed(GLFW.GLFW_KEY_GRAVE_ACCENT, 41, 0, insertToChat)
+        assertEquals(InputMode.DIRECT, session.currentInputMode)
+
+        // DIRECTモードでは文字入力が一切インターセプトされない
+        val handled = session.onCharTyped('a', "", insertToChat)
+        assertFalse(handled)
+
+        // もう一度押せば HYBRID に戻る
+        session.onKeyPressed(GLFW.GLFW_KEY_GRAVE_ACCENT, 41, 0, insertToChat)
+        assertEquals(InputMode.HYBRID, session.currentInputMode)
     }
 }

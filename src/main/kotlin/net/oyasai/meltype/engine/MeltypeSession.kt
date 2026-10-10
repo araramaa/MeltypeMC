@@ -7,7 +7,7 @@ import org.lwjgl.glfw.GLFW
 
 /**
  * 1回のチャット・GUI入力セッション（入力バッファ・変換候補・状態遷移）を管理するクラス
- * 半角/全角キーによる「半角英数字入力モード」と「日本語入力モード」の切り替えをサポートします。
+ * ［半角/全角キー不要］の自動英日ハイブリッド入力システムを実装しています。
  */
 class MeltypeSession(
     private val romajiDetector: RomajiDetector,
@@ -19,7 +19,7 @@ class MeltypeSession(
 
     private val lock = Any()
 
-    /** 現在の入力モード（半角英数 / 日本語） */
+    /** 現在の入力モード（HYBRID: 自動英日ハイブリッド / DIRECT: バニラ直接入力） */
     var currentInputMode: InputMode = MeltypeConfig.initialInputMode
         private set
 
@@ -27,7 +27,7 @@ class MeltypeSession(
     var rawBuffer: StringBuilder = StringBuilder()
         private set
 
-    /** 現在のひらがな表示テキスト（下線プレビュー用） */
+    /** 現在のプレビューテキスト（下線表示用: 日本語ならひらがな、英語なら英単語そのまま） */
     var previewKana: String = ""
         private set
 
@@ -50,7 +50,7 @@ class MeltypeSession(
     val hasCandidates: Boolean get() = synchronized(lock) { candidates.isNotEmpty() }
 
     /**
-     * 入力モードをトグル（半角英数 ↔ 日本語）
+     * 入力モードをトグル（HYBRID ↔ DIRECT）
      */
     fun toggleInputMode(insertToChat: ((String) -> Unit)? = null): InputMode {
         synchronized(lock) {
@@ -93,10 +93,7 @@ class MeltypeSession(
     }
 
     /**
-     * 半角/全角キー判定
-     * - スキャンコード 41 (0x29): 日本語JIS 106/109キーボードの半角/全角キー
-     * - GLFW_KEY_GRAVE_ACCENT (96): 同一位置のUSキー対応
-     * - GLFW_KEY_WORLD_1 (161) / GLFW_KEY_WORLD_2 (162): 国際化キー対応
+     * 半角/全角キー判定 (JIS スキャンコード 41 / GLFW_KEY_GRAVE_ACCENT / WORLDキー)
      */
     fun isHankakuZenkakuKey(keyCode: Int, scanCode: Int): Boolean {
         if (scanCode == 41) return true
@@ -110,9 +107,6 @@ class MeltypeSession(
 
     /** 無変換キー判定 (JIS スキャンコード 123 / 0x7B) */
     fun isMuhenkanKey(scanCode: Int): Boolean = scanCode == 123
-
-    /** カタカナ/ひらがなキー判定 (JIS スキャンコード 112 / 0x70) */
-    fun isHiraganaKatakanaKey(scanCode: Int): Boolean = scanCode == 112
 
     /**
      * 文字入力イベント（charTyped）の処理
@@ -130,14 +124,14 @@ class MeltypeSession(
                 }
             }
 
-            // 半角英数字入力モード時は、一切介入せずMinecraft標準（直接入力）に任せる
-            if (currentInputMode == InputMode.ENGLISH) {
+            // 直接入力固定モード（DIRECT）時は、一切介入せずMinecraft標準に任せる
+            if (currentInputMode == InputMode.DIRECT) {
                 return false
             }
 
-            // --- ここから下は日本語入力モード（InputMode.JAPANESE）の処理 ---
+            // --- ここから下はハイブリッド自動判別モード（HYBRID）の処理 ---
 
-            // 1. スラッシュコマンド判定（最優先）
+            // 1. スラッシュコマンド判定（最優先: コマンド入力時は自動直接入力）
             if (slashCommandGate.shouldBypassIme(currentChatText, c)) {
                 if (isComposing) {
                     flushAsIs(insertToChat)
@@ -145,10 +139,9 @@ class MeltypeSession(
                 return false // マイクラ標準処理に任せる
             }
 
-            // 2. 空白（スペース）の処理
+            // 2. 空白（スペース）の処理: keyPressed 側で英単語確定または日本語変換として処理
             if (c == ' ') {
                 if (isComposing) {
-                    // スペースキーは keyPressed 側で変換トリガーとして処理
                     return true
                 }
                 return false
@@ -156,7 +149,8 @@ class MeltypeSession(
 
             // 3. 入力可能な英字またはハイフン
             if (c in 'a'..'z' || c in 'A'..'Z' || c == '-') {
-                // 既に変換候補が出ている状態で英字が入力された場合、直前の候補を確定して新しく入力を開始
+                // ★重要: 直前の単語が変換中（候補表示中、または前単語が存在）の状態で英字が入力された場合
+                // 直前の単語をチャット欄へ自動確定して、新しい単語の入力をクリーンに開始！
                 if (hasCandidates) {
                     commitCurrent(insertToChat)
                 }
@@ -200,31 +194,29 @@ class MeltypeSession(
         if (!MeltypeConfig.enabled) return false
 
         synchronized(lock) {
-            // 1. 半角/全角キーによるモード切り替え（最優先判定）
+            // 1. 半角/全角キーによるモード切り替え（ハイブリッド ↔ 直接入力）
             if (isHankakuZenkakuKey(keyCode, scanCode)) {
                 skipNextGraveChar = true
                 toggleInputMode(insertToChat)
-                return true // キーを消費してチャット欄への誤入力を防ぐ
-            }
-
-            // 2. 変換キー / カタカナひらがなキー -> 日本語入力モード
-            if (isHenkanKey(scanCode) || isHiraganaKatakanaKey(scanCode)) {
-                setInputMode(InputMode.JAPANESE, insertToChat)
                 return true
             }
 
-            // 3. 無変換キー -> 半角英数字入力モード
+            // 2. 変換キー -> HYBRIDモード
+            if (isHenkanKey(scanCode)) {
+                setInputMode(InputMode.HYBRID, insertToChat)
+                return true
+            }
+
+            // 3. 無変換キー -> DIRECTモード
             if (isMuhenkanKey(scanCode)) {
-                setInputMode(InputMode.ENGLISH, insertToChat)
+                setInputMode(InputMode.DIRECT, insertToChat)
                 return true
             }
 
-            // 4. 半角英数字モードの場合は、その他のすべてのキーをバニラにパススルー（直接入力）
-            if (currentInputMode == InputMode.ENGLISH) {
+            // 直接入力モード時は、その他のすべてのキーをバニラにパススルー
+            if (currentInputMode == InputMode.DIRECT) {
                 return false
             }
-
-            // --- ここから下は日本語入力モード（InputMode.JAPANESE）の処理 ---
 
             // コマンドモード中の場合、IMEキー処理はスキップ
             if (slashCommandGate.isCommandMode && !isComposing) {
@@ -234,32 +226,41 @@ class MeltypeSession(
             if (!isComposing) return false
 
             when (keyCode) {
-                // Space: 変換実行 / 次の候補へ（Shift+Space で文中に半角スペース追加）
+                // Space: ハイブリッド入力の最重要キー
                 GLFW.GLFW_KEY_SPACE -> {
                     val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
                     if (shift) {
-                        // Shift+Space: 変換ではなく半角スペースをバッファに追加（日英混在・長文入力用）
+                        // Shift+Space: バッファ内に明示的に半角スペースを追加して文章継続
                         rawBuffer.append(' ')
                         updatePreview()
                         return true
                     }
 
-                    // 英語スコアが優勢な場合は、英単語確定＋半角スペースを挿入
-                    val eval = scoreEngine.evaluate(rawBuffer.toString(), isFinal = true)
-                    if (eval.verdict == Verdict.ENGLISH) {
-                        commitCurrent(insertToChat)
-                        insertToChat(" ")
-                        return true
-                    }
+                    val currentRaw = rawBuffer.toString()
 
+                    // 既に変換候補ウィンドウが出ている場合は次の候補へ
                     if (hasCandidates) {
                         val count = candidates.size
                         if (count > 0) {
                             selectedCandidateIndex = (selectedCandidateIndex + 1) % count
                         }
-                    } else {
-                        triggerConversion()
+                        return true
                     }
+
+                    // 単語の英日判定（スペース押下時に即時同期判定）
+                    val eval = scoreEngine.evaluate(currentRaw, isFinal = true)
+
+                    // ★英単語判定（例: "diamond", "apple", "test" 等）
+                    // 漢字変換候補ウィンドウは出さず、英単語＋半角スペースとして即座に確定！
+                    if (eval.verdict == Verdict.ENGLISH || englishDetector.isWord(currentRaw)) {
+                        insertToChat("$currentRaw ")
+                        reset()
+                        return true
+                    }
+
+                    // ★日本語判定（例: "kyouha", "sagasou" 等）
+                    // 即座にかな漢字変換をトリガーし、第一候補を表示
+                    triggerConversion()
                     return true
                 }
 
@@ -346,12 +347,32 @@ class MeltypeSession(
         return false
     }
 
-    /** 入力プレビューの更新 */
+    /**
+     * 入力プレビューの更新
+     * 英単語一致・英語優勢時は英字のままプレビュー（ぢあもんdに化けるのを防止）
+     */
     private fun updatePreview() {
         val text = rawBuffer.toString()
         if (text.isEmpty()) {
             previewKana = ""
             candidates = emptyList()
+            return
+        }
+
+        // スペース区切りの場合
+        if (text.contains(' ')) {
+            previewKana = text.split(' ').joinToString(" ") { token ->
+                if (token.isEmpty()) ""
+                else if (englishDetector.isWord(token)) token
+                else romajiDetector.toKanaLenient(token)
+            }
+            return
+        }
+
+        // 英単語辞書完全一致、または英語判定の場合は英語のままプレビュー！
+        val eval = scoreEngine.evaluate(text, isFinal = false)
+        if (eval.verdict == Verdict.ENGLISH || englishDetector.isWord(text)) {
+            previewKana = text
             return
         }
 
@@ -362,38 +383,48 @@ class MeltypeSession(
         }
     }
 
-    /** 変換リクエストの送信 */
+    /**
+     * 変換リクエストの送信（単一単語およびスペース区切りハイブリッド文対応）
+     */
     private fun triggerConversion() {
-        val text = previewKana.ifEmpty { rawBuffer.toString() }
+        val raw = rawBuffer.toString()
+        val text = previewKana.ifEmpty { raw }
+
+        // 1. スペース区切りハイブリッド文（例: "kyouha diamond wo sagasou"）の処理
+        if (raw.contains(' ')) {
+            triggerHybridSentenceConversion(raw)
+            return
+        }
+
+        // 2. 単一単語の処理
         val eval = try {
-            scoreEngine.evaluate(rawBuffer.toString(), isFinal = true)
+            scoreEngine.evaluate(raw, isFinal = true)
         } catch (_: Throwable) {
             DetectionResult(Verdict.UNDECIDED, 0, 0, "fallback")
         }
 
         // 英語スコアが優勢な場合は英字を第1候補に
-        if (eval.verdict == Verdict.ENGLISH) {
-            candidates = listOf(rawBuffer.toString())
+        if (eval.verdict == Verdict.ENGLISH || englishDetector.isWord(raw)) {
+            candidates = listOf(raw)
             selectedCandidateIndex = 0
             return
         }
 
-        // スペース押下時に即座に候補ウィンドウを出し、入力への応答性を最大化
+        // 即座に応答可能な初期候補をセット（応答性最大化）
         val immediateList = mutableListOf(text)
-        if (!immediateList.contains(rawBuffer.toString())) {
-            immediateList.add(rawBuffer.toString())
+        if (!immediateList.contains(raw)) {
+            immediateList.add(raw)
         }
         candidates = immediateList
         selectedCandidateIndex = 0
 
-        // 日本語かな漢字変換を非同期実行
+        // Google CGI による高精度かな漢字変換
         converter.convertAsync(text).thenAccept { resultList ->
             synchronized(lock) {
-                // 入力状態が変わっていなければ候補をセット
                 if (rawBuffer.isNotEmpty()) {
                     val list = resultList.take(MeltypeConfig.maxCandidates).toMutableList()
                     if (!list.contains(text)) list.add(text)
-                    if (!list.contains(rawBuffer.toString())) list.add(rawBuffer.toString())
+                    if (!list.contains(raw)) list.add(raw)
 
                     candidates = list
                     if (selectedCandidateIndex !in candidates.indices) {
@@ -402,8 +433,54 @@ class MeltypeSession(
                 }
             }
         }.exceptionally {
-            // エラー時は既にセットした immediateList のままで安全
             null
+        }
+    }
+
+    /**
+     * スペース区切りハイブリッド文（例: "kyouha diamond wo sagasou"）の変換
+     * 英単語は英語のまま保護し、日本語トークンのみを変換して結合する
+     */
+    private fun triggerHybridSentenceConversion(rawSentence: String) {
+        val tokens = rawSentence.split(' ')
+
+        // 即座に初期プレビュー候補を生成
+        val immediateSentence = tokens.joinToString(" ") { token ->
+            if (token.isEmpty()) ""
+            else if (englishDetector.isWord(token)) token
+            else romajiDetector.toKanaLenient(token)
+        }
+        candidates = listOf(immediateSentence, rawSentence)
+        selectedCandidateIndex = 0
+
+        // 日本語部分のみを変換対象として抽出
+        // 全文を Google CGI に送る前に、各トークンごとに変換または保護を行う
+        val convertedTokensFutures = tokens.map { token ->
+            if (token.isEmpty() || englishDetector.isWord(token) || scoreEngine.evaluate(token, isFinal = true).verdict == Verdict.ENGLISH) {
+                java.util.concurrent.CompletableFuture.completedFuture(listOf(token))
+            } else {
+                val kana = romajiDetector.toKanaLenient(token)
+                converter.convertAsync(kana).thenApply { res ->
+                    if (res.isNotEmpty()) res else listOf(kana)
+                }.exceptionally { listOf(kana) }
+            }
+        }
+
+        // すべてのトークンの変換が完了したら結合
+        val allFutures = java.util.concurrent.CompletableFuture.allOf(*convertedTokensFutures.toTypedArray())
+        allFutures.thenAccept {
+            synchronized(lock) {
+                if (rawBuffer.isNotEmpty()) {
+                    val tokenCandidates = convertedTokensFutures.map { it.get() }
+                    val synthesized1 = tokenCandidates.joinToString(" ") { it.firstOrNull() ?: "" }
+                    val list = mutableListOf(synthesized1)
+                    if (!list.contains(immediateSentence)) list.add(immediateSentence)
+                    if (!list.contains(rawSentence)) list.add(rawSentence)
+
+                    candidates = list
+                    selectedCandidateIndex = 0
+                }
+            }
         }
     }
 
@@ -418,7 +495,7 @@ class MeltypeSession(
                     } catch (_: Throwable) {
                         DetectionResult(Verdict.JAPANESE, 1, 0, "fallback")
                     }
-                    if (eval.verdict == Verdict.ENGLISH) {
+                    if (eval.verdict == Verdict.ENGLISH || englishDetector.isWord(rawBuffer.toString())) {
                         rawBuffer.toString()
                     } else {
                         previewKana
