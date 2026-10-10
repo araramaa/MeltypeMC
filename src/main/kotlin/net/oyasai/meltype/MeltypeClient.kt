@@ -3,6 +3,7 @@ package net.oyasai.meltype
 import net.fabricmc.api.ClientModInitializer
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents
+import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.screens.ChatScreen
 import net.minecraft.client.gui.screens.Screen
@@ -90,6 +91,23 @@ object MeltypeClient : ClientModInitializer {
                 logger.error("[MeltypeMC] Error in allowKeyPress", e)
                 true // 例外時はバニラ通常処理に安全にフォールバック
             }
+        })
+
+        // マウスクリックイベント（インジケータークリックでの入力モード切り替え）
+        ScreenMouseEvents.allowMouseClick(screen).register(ScreenMouseEvents.AllowMouseClick { s, mouseButtonEvent ->
+            try {
+                if (mouseButtonEvent.button() == 0) { // 左クリック
+                    if (CompositionRenderer.isIndicatorClicked(s, mouseButtonEvent.x(), mouseButtonEvent.y())) {
+                        session.toggleInputMode { commitText ->
+                            insertTextToScreen(s, commitText)
+                        }
+                        return@AllowMouseClick false // クリックを消費
+                    }
+                }
+            } catch (e: Throwable) {
+                logger.error("[MeltypeMC] Error in allowMouseClick", e)
+            }
+            true
         })
 
         // 文字入力イベント（charTyped）のインターセプト

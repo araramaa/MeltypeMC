@@ -93,12 +93,13 @@ class MeltypeSession(
     }
 
     /**
-     * 半角/全角キー判定 (JIS スキャンコード 41 / GLFW_KEY_GRAVE_ACCENT / WORLDキー)
+     * 半角/全角キー判定 (JIS スキャンコード 41 / 0x29 / GLFW_KEY_GRAVE_ACCENT / WORLDキー / F12)
      */
     fun isHankakuZenkakuKey(keyCode: Int, scanCode: Int): Boolean {
-        if (scanCode == 41) return true
+        if (scanCode == 41 || scanCode == 0x29) return true
         if (keyCode == GLFW.GLFW_KEY_GRAVE_ACCENT) return true
         if (keyCode == GLFW.GLFW_KEY_WORLD_1 || keyCode == GLFW.GLFW_KEY_WORLD_2) return true
+        if (keyCode == GLFW.GLFW_KEY_F12) return true
         return false
     }
 
@@ -119,9 +120,15 @@ class MeltypeSession(
             // 半角/全角キー押下直後のバッククォート/チルダ文字等の誤入力を抑止
             if (skipNextGraveChar) {
                 skipNextGraveChar = false
-                if (c == '`' || c == '~' || c == '\u0000') {
+                if (c == '`' || c == '~' || c == '｀' || c == '\u0000') {
                     return true
                 }
+            }
+
+            // 半角/全角キー（バッククォート）が charTyped として飛んできた場合の完全救済（OSにキーイベントが吸われた環境対応）
+            if (c == '`' || c == '~' || c == '｀') {
+                toggleInputMode(insertToChat)
+                return true
             }
 
             // 直接入力固定モード（DIRECT）時は、一切介入せずMinecraft標準に任せる
@@ -197,6 +204,13 @@ class MeltypeSession(
             // 1. 半角/全角キーによるモード切り替え（ハイブリッド ↔ 直接入力）
             if (isHankakuZenkakuKey(keyCode, scanCode)) {
                 skipNextGraveChar = true
+                toggleInputMode(insertToChat)
+                return true
+            }
+
+            // Ctrl+Space によるモード切り替え
+            val ctrl = (modifiers and GLFW.GLFW_MOD_CONTROL) != 0
+            if (ctrl && keyCode == GLFW.GLFW_KEY_SPACE) {
                 toggleInputMode(insertToChat)
                 return true
             }

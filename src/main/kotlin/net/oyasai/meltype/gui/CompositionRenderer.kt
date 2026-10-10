@@ -128,4 +128,32 @@ object CompositionRenderer {
             // 描画エラー時もゲームを落とさないフェイルセーフ保護
         }
     }
+
+    /**
+     * マウスクリック位置がモードインジケーター上にあるかを判定（マウスクリックでのトグル用）
+     */
+    fun isIndicatorClicked(screen: Screen, mouseX: Double, mouseY: Double): Boolean {
+        if (!MeltypeConfig.showModeIndicator) return false
+        try {
+            val screenWidth = screen.width
+            val screenHeight = screen.height
+            val className = screen.javaClass.name
+            val (baseX, baseY) = when {
+                screen is ChatScreen || className.contains("Chat") -> 4 to (screenHeight - 26)
+                screen is AnvilScreen || className.contains("Anvil") -> ((screenWidth - 176) / 2 + 58) to ((screenHeight - 166) / 2 + 38)
+                screen is AbstractSignEditScreen || className.contains("Sign") -> ((screenWidth / 2) - 100) to (screenHeight - 50)
+                screen is BookEditScreen || className.contains("Book") -> ((screenWidth / 2) - 80) to (screenHeight - 35)
+                else -> 4 to (screenHeight - 26)
+            }
+            val client = Minecraft.getInstance()
+            val font = client.font
+            val indicatorWidth = font.width("[あ/A]") + 10
+            val badgeHeight = 14
+
+            return mouseX >= (baseX - 2) && mouseX <= (baseX + indicatorWidth + 2) &&
+                   mouseY >= (baseY - 4) && mouseY <= (baseY + badgeHeight)
+        } catch (_: Throwable) {
+            return false
+        }
+    }
 }

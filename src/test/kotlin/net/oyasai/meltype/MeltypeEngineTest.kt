@@ -17,7 +17,7 @@ class MeltypeEngineTest {
     @BeforeEach
     fun setUp() {
         MeltypeConfig.enabled = true
-        MeltypeConfig.initialInputMode = InputMode.HYBRID
+        MeltypeConfig.initialInputMode = InputMode.DIRECT
         MeltypeConfig.rememberLastInputMode = false
 
         romajiDetector = RomajiDetector()
@@ -112,7 +112,11 @@ class MeltypeEngineTest {
             slashCommandGate = slashGate
         )
 
-        // 初期状態でHYBRIDモード（キー切り替え一切不要）
+        // 初期状態は DIRECT モード
+        assertEquals(InputMode.DIRECT, session.currentInputMode)
+
+        // 半角/全角キーを押して HYBRID（日本語変換）モードに切り替え
+        session.onKeyPressed(GLFW.GLFW_KEY_GRAVE_ACCENT, 41, 0, insertToChat)
         assertEquals(InputMode.HYBRID, session.currentInputMode)
 
         // 1. "kyouha" + Space -> 日本語判定
@@ -163,6 +167,9 @@ class MeltypeEngineTest {
             slashCommandGate = slashGate
         )
 
+        // HYBRIDモードに切り替え
+        session.toggleInputMode()
+
         // Shift+Space 等でスペースを挟んで一括入力した場合
         val input = "kyouha diamond wo sagasou"
         for (c in input) {
@@ -189,18 +196,23 @@ class MeltypeEngineTest {
             slashCommandGate = slashGate
         )
 
-        assertEquals(InputMode.HYBRID, session.currentInputMode)
-
-        // 半角/全角キーで直接入力固定モード（DIRECT）に切り替え
-        session.onKeyPressed(GLFW.GLFW_KEY_GRAVE_ACCENT, 41, 0, insertToChat)
+        // チャット開始時は DIRECT モード（何もしなければ通常の半角英数入力）
         assertEquals(InputMode.DIRECT, session.currentInputMode)
 
-        // DIRECTモードでは文字入力が一切インターセプトされない
+        // DIRECTモードでは文字入力が一切インターセプトされず、通常の半角がそのまま通る
         val handled = session.onCharTyped('a', "", insertToChat)
         assertFalse(handled)
 
-        // もう一度押せば HYBRID に戻る
+        // 半角/全角キー（または F12 / Ctrl+Space / マウスクリック）で HYBRID（日本語変換モード）に切り替え
         session.onKeyPressed(GLFW.GLFW_KEY_GRAVE_ACCENT, 41, 0, insertToChat)
         assertEquals(InputMode.HYBRID, session.currentInputMode)
+
+        // HYBRID モードでは文字入力がインターセプトされてハイブリッド変換バッファに入る
+        val handledHybrid = session.onCharTyped('a', "", insertToChat)
+        assertTrue(handledHybrid)
+
+        // もう一度押せば DIRECT（半角直接入力）に戻る
+        session.onKeyPressed(GLFW.GLFW_KEY_GRAVE_ACCENT, 41, 0, insertToChat)
+        assertEquals(InputMode.DIRECT, session.currentInputMode)
     }
 }

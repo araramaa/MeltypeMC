@@ -27,10 +27,10 @@ object MeltypeConfig {
     /** タイポ自動補正を有効にするか */
     var typoCorrectionEnabled: Boolean = true
 
-    /** チャット画面等を開いた際の初期入力モード（デフォルト: HYBRID = 自動英日ハイブリッド入力） */
-    var initialInputMode: InputMode = InputMode.HYBRID
+    /** チャット画面等を開いた際の初期入力モード（デフォルト: DIRECT = 何もしない時は半角英数字） */
+    var initialInputMode: InputMode = InputMode.DIRECT
 
-    /** 前回の入力モードを画面を跨いで記憶するか */
+    /** 前回の入力モードを画面を跨いで記憶するか（false: チャットを開くたびに基本の半角から開始） */
     var rememberLastInputMode: Boolean = false
 
     /** 画面上にモードインジケーター（[Mel] / [A]）を表示するか */
