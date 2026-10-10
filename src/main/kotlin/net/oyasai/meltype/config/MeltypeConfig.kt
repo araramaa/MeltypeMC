@@ -1,5 +1,7 @@
 package net.oyasai.meltype.config
 
+import net.oyasai.meltype.engine.InputMode
+
 /**
  * Meltype MC の設定クラス
  * 読みやすく、直しやすく、安全にデフォルト値を管理します。
@@ -24,6 +26,15 @@ object MeltypeConfig {
 
     /** タイポ自動補正を有効にするか */
     var typoCorrectionEnabled: Boolean = true
+
+    /** チャット画面等を開いた際の初期入力モード（デフォルト: 半角英数） */
+    var initialInputMode: InputMode = InputMode.ENGLISH
+
+    /** 前回の入力モードを画面を跨いで記憶するか（デフォルト: false = チャットを開くたびに半角英数から開始） */
+    var rememberLastInputMode: Boolean = false
+
+    /** 画面上にモードインジケーター（[あ] / [A]）を表示するか */
+    var showModeIndicator: Boolean = true
 
     /**
      * 有効/無効を切り替えるトグル関数

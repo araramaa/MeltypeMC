@@ -7,7 +7,7 @@ import org.lwjgl.glfw.GLFW
 
 /**
  * 1回のチャット・GUI入力セッション（入力バッファ・変換候補・状態遷移）を管理するクラス
- * 高い堅牢性・例外安全性・直しやすい構造を備えています。
+ * 半角/全角キーによる「半角英数字入力モード」と「日本語入力モード」の切り替えをサポートします。
  */
 class MeltypeSession(
     private val romajiDetector: RomajiDetector,
@@ -18,6 +18,10 @@ class MeltypeSession(
 ) {
 
     private val lock = Any()
+
+    /** 現在の入力モード（半角英数 / 日本語） */
+    var currentInputMode: InputMode = MeltypeConfig.initialInputMode
+        private set
 
     /** 現在入力中の生キーストローク（アルファベット列） */
     var rawBuffer: StringBuilder = StringBuilder()
@@ -36,11 +40,79 @@ class MeltypeSession(
     var selectedCandidateIndex: Int = 0
         private set
 
+    /** 半角/全角キー押下直後のバッククォート/チルダ文字入力をブロックするフラグ */
+    private var skipNextGraveChar: Boolean = false
+
     /** 現在IME入力・変換中かどうか */
     val isComposing: Boolean get() = synchronized(lock) { rawBuffer.isNotEmpty() }
 
     /** 変換候補ウィンドウを表示中かどうか */
     val hasCandidates: Boolean get() = synchronized(lock) { candidates.isNotEmpty() }
+
+    /**
+     * 入力モードをトグル（半角英数 ↔ 日本語）
+     */
+    fun toggleInputMode(insertToChat: ((String) -> Unit)? = null): InputMode {
+        synchronized(lock) {
+            if (isComposing && insertToChat != null) {
+                commitCurrent(insertToChat)
+            } else {
+                reset()
+            }
+            currentInputMode = currentInputMode.toggle()
+            return currentInputMode
+        }
+    }
+
+    /**
+     * 入力モードを明示的に設定
+     */
+    fun setInputMode(mode: InputMode, insertToChat: ((String) -> Unit)? = null) {
+        synchronized(lock) {
+            if (currentInputMode != mode) {
+                if (isComposing && insertToChat != null) {
+                    commitCurrent(insertToChat)
+                } else {
+                    reset()
+                }
+                currentInputMode = mode
+            }
+        }
+    }
+
+    /**
+     * 新しい画面を開いた際の初期化
+     */
+    fun resetForNewScreen() {
+        synchronized(lock) {
+            reset()
+            if (!MeltypeConfig.rememberLastInputMode) {
+                currentInputMode = MeltypeConfig.initialInputMode
+            }
+        }
+    }
+
+    /**
+     * 半角/全角キー判定
+     * - スキャンコード 41 (0x29): 日本語JIS 106/109キーボードの半角/全角キー
+     * - GLFW_KEY_GRAVE_ACCENT (96): 同一位置のUSキー対応
+     * - GLFW_KEY_WORLD_1 (161) / GLFW_KEY_WORLD_2 (162): 国際化キー対応
+     */
+    fun isHankakuZenkakuKey(keyCode: Int, scanCode: Int): Boolean {
+        if (scanCode == 41) return true
+        if (keyCode == GLFW.GLFW_KEY_GRAVE_ACCENT) return true
+        if (keyCode == GLFW.GLFW_KEY_WORLD_1 || keyCode == GLFW.GLFW_KEY_WORLD_2) return true
+        return false
+    }
+
+    /** 変換キー判定 (JIS スキャンコード 121 / 0x79) */
+    fun isHenkanKey(scanCode: Int): Boolean = scanCode == 121
+
+    /** 無変換キー判定 (JIS スキャンコード 123 / 0x7B) */
+    fun isMuhenkanKey(scanCode: Int): Boolean = scanCode == 123
+
+    /** カタカナ/ひらがなキー判定 (JIS スキャンコード 112 / 0x70) */
+    fun isHiraganaKatakanaKey(scanCode: Int): Boolean = scanCode == 112
 
     /**
      * 文字入力イベント（charTyped）の処理
@@ -50,6 +122,21 @@ class MeltypeSession(
         if (!MeltypeConfig.enabled) return false
 
         synchronized(lock) {
+            // 半角/全角キー押下直後のバッククォート/チルダ文字等の誤入力を抑止
+            if (skipNextGraveChar) {
+                skipNextGraveChar = false
+                if (c == '`' || c == '~' || c == '\u0000') {
+                    return true
+                }
+            }
+
+            // 半角英数字入力モード時は、一切介入せずMinecraft標準（直接入力）に任せる
+            if (currentInputMode == InputMode.ENGLISH) {
+                return false
+            }
+
+            // --- ここから下は日本語入力モード（InputMode.JAPANESE）の処理 ---
+
             // 1. スラッシュコマンド判定（最優先）
             if (slashCommandGate.shouldBypassIme(currentChatText, c)) {
                 if (isComposing) {
@@ -69,7 +156,7 @@ class MeltypeSession(
 
             // 3. 入力可能な英字またはハイフン
             if (c in 'a'..'z' || c in 'A'..'Z' || c == '-') {
-                // ★重要: 既に変換候補が出ている状態で英字が入力された場合、直前の単語を確定して新しく入力を開始
+                // 既に変換候補が出ている状態で英字が入力された場合、直前の候補を確定して新しく入力を開始
                 if (hasCandidates) {
                     commitCurrent(insertToChat)
                 }
@@ -96,7 +183,6 @@ class MeltypeSession(
 
             // 5. 英字以外の記号や数字が入力された場合
             if (isComposing) {
-                // 候補が出ている状態での数字キーは keyPressed 側で選択済み
                 commitCurrent(insertToChat)
                 insertToChat(c.toString())
                 return true
@@ -108,12 +194,38 @@ class MeltypeSession(
 
     /**
      * 特殊キー入力イベント（keyPressed）の処理
-     * @return true の場合、このMODでキーを消費した
+     * @return true の場合、このMODでキーを消費したためマイクラ標準のキー処理をキャンセルする
      */
     fun onKeyPressed(keyCode: Int, scanCode: Int, modifiers: Int, insertToChat: (String) -> Unit): Boolean {
         if (!MeltypeConfig.enabled) return false
 
         synchronized(lock) {
+            // 1. 半角/全角キーによるモード切り替え（最優先判定）
+            if (isHankakuZenkakuKey(keyCode, scanCode)) {
+                skipNextGraveChar = true
+                toggleInputMode(insertToChat)
+                return true // キーを消費してチャット欄への誤入力を防ぐ
+            }
+
+            // 2. 変換キー / カタカナひらがなキー -> 日本語入力モード
+            if (isHenkanKey(scanCode) || isHiraganaKatakanaKey(scanCode)) {
+                setInputMode(InputMode.JAPANESE, insertToChat)
+                return true
+            }
+
+            // 3. 無変換キー -> 半角英数字入力モード
+            if (isMuhenkanKey(scanCode)) {
+                setInputMode(InputMode.ENGLISH, insertToChat)
+                return true
+            }
+
+            // 4. 半角英数字モードの場合は、その他のすべてのキーをバニラにパススルー（直接入力）
+            if (currentInputMode == InputMode.ENGLISH) {
+                return false
+            }
+
+            // --- ここから下は日本語入力モード（InputMode.JAPANESE）の処理 ---
+
             // コマンドモード中の場合、IMEキー処理はスキップ
             if (slashCommandGate.isCommandMode && !isComposing) {
                 return false
@@ -338,13 +450,14 @@ class MeltypeSession(
         }
     }
 
-    /** 入力状態をリセット */
+    /** 入力状態をリセット（モードは維持） */
     fun reset() {
         synchronized(lock) {
             rawBuffer.clear()
             previewKana = ""
             candidates = emptyList()
             selectedCandidateIndex = 0
+            skipNextGraveChar = false
         }
     }
 }

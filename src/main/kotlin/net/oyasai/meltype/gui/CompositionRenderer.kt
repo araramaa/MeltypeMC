@@ -8,10 +8,12 @@ import net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen
 import net.minecraft.client.gui.screens.inventory.AnvilScreen
 import net.minecraft.client.gui.screens.inventory.BookEditScreen
 import net.minecraft.network.chat.Component
+import net.oyasai.meltype.config.MeltypeConfig
+import net.oyasai.meltype.engine.InputMode
 import net.oyasai.meltype.engine.MeltypeSession
 
 /**
- * 画面上に入力中テキスト（下線プレビュー）および変換候補ウィンドウを描画するレンダラー
+ * 画面上に入力モードインジケーター（[あ] / [A]）、入力中テキスト（下線プレビュー）、および変換候補ウィンドウを描画するレンダラー
  * 画面外はみ出し防止および例外安全ガードを備えています。
  */
 object CompositionRenderer {
@@ -20,12 +22,13 @@ object CompositionRenderer {
     private const val HIGHLIGHT_BG = 0x88336699.toInt()  // 選択中ハイライト青
     private const val TEXT_COLOR = 0xFFFFFFFF.toInt()    // 白文字
     private const val ACCENT_COLOR = 0xFFFFAA00.toInt()  // オレンジ/金色アクセント
+    private const val DIM_COLOR = 0xFFAAAAAA.toInt()     // 控えめなグレー文字
 
     /**
-     * 現在開いているScreenのフォアグラウンドにプレビューおよび候補ウィンドウを描画
+     * 現在開いているScreenのフォアグラウンドにプレビュー、候補ウィンドウ、およびモードインジケーターを描画
      */
     fun render(screen: Screen, extractor: GuiGraphicsExtractor, session: MeltypeSession) {
-        if (!session.isComposing) return
+        if (!MeltypeConfig.enabled) return
 
         try {
             val client = Minecraft.getInstance()
@@ -43,7 +46,29 @@ object CompositionRenderer {
                 else -> 4 to (screenHeight - 26)
             }
 
-            // 1. 変換候補リストの描画
+            // 1. 入力モードインジケーターの描画（[あ] / [A]）
+            var indicatorWidth = 0
+            if (MeltypeConfig.showModeIndicator) {
+                val mode = session.currentInputMode
+                val badgeText = mode.badge
+                indicatorWidth = font.width(badgeText) + 6
+                val badgeHeight = 11
+                val badgeY = baseY
+
+                // 日本語モード時は金色アクセント、半角英数時は控えめなグレー
+                val badgeTextColor = if (mode == InputMode.JAPANESE) ACCENT_COLOR else DIM_COLOR
+
+                extractor.fill(baseX, badgeY - 2, baseX + indicatorWidth, badgeY + badgeHeight, BG_COLOR)
+                extractor.textRenderer().accept(baseX + 3, badgeY, Component.literal(badgeText).withColor(badgeTextColor))
+            }
+
+            // 変換中（isComposing）でなければ以降の描画は不要
+            if (!session.isComposing) return
+
+            // プレビューと候補の開始X座標（インジケーターの右側に配置）
+            val contentX = baseX + indicatorWidth + 2
+
+            // 2. 変換候補リストの描画
             if (session.hasCandidates) {
                 val candidates = session.candidates
                 if (candidates.isNotEmpty()) {
@@ -61,7 +86,7 @@ object CompositionRenderer {
                     val boxY = baseY - boxHeight - 2
 
                     // 画面右端へのはみ出し防止
-                    val safeX = baseX.coerceIn(2, maxOf(2, screenWidth - totalWidth - 2))
+                    val safeX = contentX.coerceIn(2, maxOf(2, screenWidth - totalWidth - 2))
 
                     // 背景ボックス
                     extractor.fill(safeX, boxY, safeX + totalWidth, boxY + boxHeight, BG_COLOR)
@@ -84,13 +109,13 @@ object CompositionRenderer {
                 }
             }
 
-            // 2. 入力中ひらがなプレビュー（下線付き）の描画
+            // 3. 入力中ひらがなプレビュー（下線付き）の描画
             val preview = session.previewKana.ifEmpty { session.rawBuffer.toString() }
             if (preview.isNotEmpty()) {
                 val previewText = "変換中: $preview"
                 val textWidth = font.width(previewText)
                 val previewY = if (session.hasCandidates) baseY - 30 else baseY
-                val safeX = baseX.coerceIn(2, maxOf(2, screenWidth - textWidth - 8))
+                val safeX = contentX.coerceIn(2, maxOf(2, screenWidth - textWidth - 8))
 
                 // 背景
                 extractor.fill(safeX, previewY - 2, safeX + textWidth + 8, previewY + 11, BG_COLOR)

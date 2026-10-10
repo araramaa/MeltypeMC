@@ -74,6 +74,7 @@ object MeltypeClient : ClientModInitializer {
         if (!registeredScreens.add(screen)) return // 二重登録防止
 
         logger.info("[MeltypeMC] Attaching input handlers to screen: ${screen.javaClass.simpleName}")
+        session.resetForNewScreen()
 
         // 特殊キー入力（Space, Enter, Backspace, Tab, 矢印キー等）のインターセプト
         ScreenKeyboardEvents.allowKeyPress(screen).register(ScreenKeyboardEvents.AllowKeyPress { s, keyEvent ->
@@ -109,7 +110,7 @@ object MeltypeClient : ClientModInitializer {
             }
         })
 
-        // 描画フェーズ（インライン候補ウィンドウ＆下線プレビュー）
+        // 描画フェーズ（インライン候補ウィンドウ＆下線プレビュー＆モードインジケーター）
         ScreenEvents.afterForeground(screen).register(ScreenEvents.AfterForeground { s, extractor, _, _, _ ->
             if (isTextInputActive(s)) {
                 try {
@@ -122,7 +123,7 @@ object MeltypeClient : ClientModInitializer {
         // 画面を閉じた時のセッションリセット
         ScreenEvents.remove(screen).register(ScreenEvents.Remove { _ ->
             try {
-                session.reset()
+                session.resetForNewScreen()
                 slashCommandGate.reset()
             } catch (_: Throwable) {
             }
