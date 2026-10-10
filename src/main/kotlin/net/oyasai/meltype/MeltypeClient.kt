@@ -129,10 +129,10 @@ object MeltypeClient : ClientModInitializer {
         })
 
         // 描画フェーズ（インライン候補ウィンドウ＆下線プレビュー＆モードインジケーター）
-        ScreenEvents.afterForeground(screen).register(ScreenEvents.AfterForeground { s, extractor, _, _, _ ->
+        ScreenEvents.afterForeground(screen).register(ScreenEvents.AfterForeground { s, extractor, mouseX, mouseY, _ ->
             if (isTextInputActive(s)) {
                 try {
-                    CompositionRenderer.render(s, extractor, session)
+                    CompositionRenderer.render(s, extractor, session, mouseX, mouseY)
                 } catch (_: Throwable) {
                 }
             }
