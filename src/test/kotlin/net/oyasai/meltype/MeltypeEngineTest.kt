@@ -474,4 +474,61 @@ class MeltypeEngineTest {
             MeltypeConfig.save()
         }
     }
+
+    /**
+     * 「いま (ima)」をはじめとする短縮単語・一般的なひらがな単語が
+     * 誤って英語（image等のprefix）判定されず、正常に日本語として変換されることの検証
+     */
+    @Test
+    fun testImaAndShortRomajiEvaluation() {
+        // 1. ima の評価
+        val imaResult = scoreEngine.evaluate("ima", isFinal = true)
+        assertEquals(Verdict.JAPANESE, imaResult.verdict, "ima は英単語ではないので日本語として判定されること")
+
+        // 2. 他の短語（kore, sora, inu, neko, yama）
+        for (word in listOf("kore", "sora", "inu", "neko", "yama", "asa", "haru")) {
+            val res = scoreEngine.evaluate(word, isFinal = true)
+            assertEquals(Verdict.JAPANESE, res.verdict, "$word は確定時に日本語判定されること")
+        }
+
+        // 3. 実際の英単語は英語判定を維持
+        for (eng in listOf("diamond", "apple", "test", "help", "world", "craft")) {
+            val res = scoreEngine.evaluate(eng, isFinal = true)
+            assertEquals(Verdict.ENGLISH, res.verdict, "$eng は確定時に英語判定されること")
+        }
+    }
+
+    /**
+     * 「ima」と入力して Space を押した際に、チャット欄へ「ima 」と直接出力されず、
+     * 正常に変換候補ウィンドウが表示されることの検証
+     */
+    @Test
+    fun testImaTypingSession() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        // HYBRIDモードに設定
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // "ima" とタイプ
+        for (c in "ima") {
+            session.onCharTyped(c, "", insertToChat)
+        }
+
+        // 入力中のプレビューが「いま」になっていること
+        assertEquals("いま", session.previewKana)
+
+        // Space を押す -> 英語として確定されず、変換候補ウィンドウが表示されること！
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates, "Space押下時に変換候補が表示されること")
+        assertTrue(committed.isEmpty(), "チャット欄へ「ima 」として勝手に確定出力されないこと")
+        assertTrue(session.candidates.contains("いま"), "候補リストに読みが含まれること")
+    }
 }

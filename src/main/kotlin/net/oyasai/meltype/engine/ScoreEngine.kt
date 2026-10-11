@@ -56,14 +56,28 @@ class ScoreEngine(
             if (analysis.longVowels > 0) japaneseScore += 1  // ou, uu
             if (analysis.tokens.isNotEmpty()) japaneseScore += analysis.tokens.size
 
-            // 5文字以上でローマ字として完全に読め、英語辞書にない場合は日本語
-            if (normalized.length >= 5 && analysis.partial.isEmpty() && !englishDetector.isPrefix(letters)) {
-                japaneseScore += 4
+            // ローマ字として綺麗に音節が完結しており（partialが空）、完全な英単語ではない場合の加点
+            if (analysis.partial.isEmpty() && !englishDetector.isWord(letters)) {
+                if (normalized.length >= 5 && !englishDetector.isPrefix(letters)) {
+                    japaneseScore += 4
+                } else if (normalized.length >= 3) {
+                    // 3〜4文字の一般的な短語（ima, kore, sora, inu, neko 等）に対する加点
+                    japaneseScore += 3
+                }
             }
         }
 
         // 2. 英語辞書解析
-        englishScore += englishDetector.evaluate(letters)
+        if (isFinal) {
+            // 単語確定時（Space/Enter）:
+            // ユーザーは入力を完了しているので、接頭辞(prefix)ではなく
+            // 「完全な英単語であるかどうか」のみで英語スコアを評価する
+            if (englishDetector.isWord(letters)) {
+                englishScore += 5
+            }
+        } else {
+            englishScore += englishDetector.evaluate(letters)
+        }
 
         // ★最重要: 3文字以上で英単語辞書に完全一致する場合、ローマ字偶然一致（例: diamond -> ぢあもんd）を排して英語を確定！
         if (letters.length >= 3 && englishDetector.isWord(letters)) {
@@ -91,6 +105,12 @@ class ScoreEngine(
         }
 
         if (isFinal) {
+            // 単語確定時（スペース押下時など）:
+            // ローマ字として綺麗に完結しており、かつ英単語完全一致でない場合は日本語として確定！
+            if (analysis.isValid && analysis.partial.isEmpty() && !englishDetector.isWord(letters)) {
+                return DetectionResult(Verdict.JAPANESE, japaneseScore, englishScore, "確定時: 有効なローマ字単語")
+            }
+
             return if (japaneseScore >= englishScore) {
                 DetectionResult(Verdict.JAPANESE, japaneseScore, englishScore, "確定時: 日本語")
             } else {
