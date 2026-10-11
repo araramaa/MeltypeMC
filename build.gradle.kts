@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "net.oyasai.meltype"
-version = "1.0.0"
+version = "1.0.1"
 
 repositories {
     mavenCentral()
@@ -25,7 +25,7 @@ tasks.test {
 
 tasks.jar {
     archiveBaseName.set("meltype-mc")
-    archiveVersion.set("1.0.0")
+    archiveVersion.set("1.0.1")
     archiveClassifier.set("")
 
     manifest {
