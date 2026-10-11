@@ -57,10 +57,9 @@ object MeltypeClient : ClientModInitializer {
             converter = GoogleCgiConverter()
         )
 
-        // 3. Fabric Screen API のライフサイクルイベント登録（BEFORE_INIT と AFTER_INIT 両対応で確実にアタッチ）
-        ScreenEvents.BEFORE_INIT.register(ScreenEvents.BeforeInit { _, screen, _, _ ->
-            registerScreenHandlers(screen)
-        })
+        // 3. Fabric Screen API のライフサイクルイベント登録
+        // Fabric Screen API では init() や resize() のたびに画面インスタンス内部のイベントが破棄・再生成されるため、
+        // 画面が完全に構築された AFTER_INIT のタイミングで各種ハンドラを画面インスタンスへ登録します。
         ScreenEvents.AFTER_INIT.register(ScreenEvents.AfterInit { _, screen, _, _ ->
             registerScreenHandlers(screen)
         })
@@ -68,11 +67,8 @@ object MeltypeClient : ClientModInitializer {
         logger.info("[MeltypeMC] Successfully initialized! Auto English/Japanese detection and '/' command mode are ready.")
     }
 
-    private val registeredScreens = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Screen, Boolean>())
-
     private fun registerScreenHandlers(screen: Screen) {
         if (!isTextInputActive(screen)) return
-        if (!registeredScreens.add(screen)) return // 二重登録防止
 
         logger.info("[MeltypeMC] Attaching input handlers to screen: ${screen.javaClass.simpleName}")
         session.resetForNewScreen()
