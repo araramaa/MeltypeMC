@@ -216,4 +216,13 @@ class RomajiDetector {
         sb.append(analysis.partial)
         return sb.toString()
     }
+
+    /**
+     * ひらがな文字列をカタカナに変換する
+     */
+    fun toKatakana(hiragana: String): String {
+        return hiragana.map { c ->
+            if (c in '\u3041'..'\u3096') c + 0x60 else c
+        }.joinToString("")
+    }
 }

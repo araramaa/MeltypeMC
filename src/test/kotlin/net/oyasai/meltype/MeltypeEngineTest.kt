@@ -610,4 +610,68 @@ class MeltypeEngineTest {
         assertTrue(committed.isEmpty(), "勝手にチャット欄へ確定出力されないこと")
         assertTrue(session.candidates.contains("どうろ"), "候補リストに「どうろ」が含まれること")
     }
+
+    /**
+     * 「sore (それ)」「are (あれ)」「dare (だれ)」「sake (酒)」などの英語辞書重複語が、
+     * 英語確定されずに正常に日本語（「それ」「あれ」等）として変換できることの検証
+     */
+    @Test
+    fun testSoreAndAmbiguousJapaneseWords() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // "sore" とタイプ
+        for (c in "sore") {
+            session.onCharTyped(c, "", insertToChat)
+        }
+
+        // 入力中プレビューが「それ」になっていること
+        assertEquals("それ", session.previewKana)
+
+        // Space を押す -> 英語 "sore " として勝手に確定されず、候補ウィンドウが開くこと！
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates, "Space押下時に変換候補ウィンドウが開くこと")
+        assertTrue(committed.isEmpty(), "チャット欄へ英語のまま勝手に確定挿入されないこと")
+        assertTrue(session.candidates.contains("それ"), "候補リストに「それ」が含まれること")
+    }
+
+    /**
+     * 英語判定された単語（例: diamond）であっても、候補ウィンドウを開いた場合に
+     * 英語だけでなく日本語変換候補（カタカナ等）が共存して表示されることの検証
+     */
+    @Test
+    fun testEnglishWordWithJapaneseCandidates() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // "diamond" とタイプ
+        for (c in "diamond") {
+            session.onCharTyped(c, "", insertToChat)
+        }
+
+        // Tabキー（または下矢印）で候補ウィンドウを開く
+        session.onKeyPressed(GLFW.GLFW_KEY_TAB, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates, "Tabキーで候補ウィンドウが開くこと")
+        // 英語だけでなく、カタカナや読みが候補に含まれていること！
+        assertTrue(session.candidates.contains("diamond"), "第1候補に英語が含まれること")
+        assertTrue(session.candidates.any { it != "diamond" }, "英語以外の日本語候補（カタカナ・ひらがな等）が含まれること")
+    }
 }

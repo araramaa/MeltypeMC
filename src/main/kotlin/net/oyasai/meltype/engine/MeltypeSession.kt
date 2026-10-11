@@ -311,15 +311,16 @@ class MeltypeSession(
                     // 単語の英日判定（スペース押下時に即時同期判定）
                     val eval = scoreEngine.evaluate(currentRaw, isFinal = true)
 
-                    // ★英単語判定（例: "diamond", "apple", "test" 等: 3文字以上）
+                    // ★純粋な英単語判定（例: "diamond", "apple", "test" 等）
                     // 漢字変換候補ウィンドウは出さず、英単語＋半角スペースとして即座に確定！
-                    if (eval.verdict == Verdict.ENGLISH || (currentRaw.length >= 3 && englishDetector.isWord(currentRaw))) {
+                    // ※日本語日常語（sore, are, dare, sake 等）は日本語変換候補を表示！
+                    if (eval.verdict == Verdict.ENGLISH && scoreEngine.isPureEnglishWord(currentRaw)) {
                         insertToChat("$currentRaw ")
                         reset()
                         return true
                     }
 
-                    // ★日本語判定（例: "kyouha", "sagasou" 等）
+                    // ★日本語判定（例: "kyouha", "sagasou", "sore", "douro" 等）
                     // 即座にかな漢字変換をトリガーし、第一候補を表示
                     triggerConversion()
                     return true
@@ -352,8 +353,12 @@ class MeltypeSession(
                     return true
                 }
 
-                // Tab / Shift+Tab: 候補送り・戻し
+                // Tab / Shift+Tab: 候補送り・戻し（未表示時は候補表示）
                 GLFW.GLFW_KEY_TAB -> {
+                    if (!hasCandidates && isComposing) {
+                        triggerConversion()
+                        return true
+                    }
                     if (hasCandidates) {
                         val count = candidates.size
                         if (count > 0) {
@@ -368,8 +373,12 @@ class MeltypeSession(
                     }
                 }
 
-                // 左右下矢印キー: 候補選択
+                // 左右下矢印キー: 候補選択（未表示時は下矢印で候補表示）
                 GLFW.GLFW_KEY_RIGHT, GLFW.GLFW_KEY_DOWN -> {
+                    if (!hasCandidates && isComposing && keyCode == GLFW.GLFW_KEY_DOWN) {
+                        triggerConversion()
+                        return true
+                    }
                     if (hasCandidates && candidates.isNotEmpty()) {
                         selectedCandidateIndex = (selectedCandidateIndex + 1) % candidates.size
                         return true
@@ -424,7 +433,7 @@ class MeltypeSession(
         if (text.contains(' ')) {
             previewKana = text.split(' ').joinToString(" ") { token ->
                 if (token.isEmpty()) ""
-                else if (token.length >= 3 && englishDetector.isWord(token)) token
+                else if (scoreEngine.isPureEnglishWord(token)) token
                 else {
                     val compound = compoundWordSplitter.split(token)
                     if (compound != null) "${compound.english} ${compound.japaneseKana}"
@@ -441,9 +450,9 @@ class MeltypeSession(
             return
         }
 
-        // 英単語辞書完全一致（3文字以上）、または英語判定の場合は英語のままプレビュー！
+        // 純粋な英単語、または英語判定の場合は英語のままプレビュー！
         val eval = scoreEngine.evaluate(text, isFinal = false)
-        if (eval.verdict == Verdict.ENGLISH || (text.length >= 3 && englishDetector.isWord(text))) {
+        if (eval.verdict == Verdict.ENGLISH && scoreEngine.isPureEnglishWord(text)) {
             previewKana = text
             return
         }
@@ -484,32 +493,53 @@ class MeltypeSession(
             DetectionResult(Verdict.UNDECIDED, 0, 0, "fallback")
         }
 
-        // 英語スコアが優勢な場合は英字を第1候補に
-        if (eval.verdict == Verdict.ENGLISH || (raw.length >= 3 && englishDetector.isWord(raw))) {
-            candidates = listOf(raw)
-            selectedCandidateIndex = 0
-            return
-        }
+        val isEnglishDominant = eval.verdict == Verdict.ENGLISH && scoreEngine.isPureEnglishWord(raw)
+        val initialKana = romajiDetector.toKanaLenient(raw)
+        val initialKatakana = romajiDetector.toKatakana(initialKana)
 
-        // 即座に応答可能な初期候補をセット（★学習済み候補を最優先で配置）
-        val learnedList = learningStore.getLearnedCandidates(text)
+        // 即座に応答可能な初期候補をセット
         val immediateList = mutableListOf<String>()
-        immediateList.addAll(learnedList)
-        if (!immediateList.contains(text)) immediateList.add(text)
-        if (!immediateList.contains(raw)) immediateList.add(raw)
+        if (isEnglishDominant) {
+            // 英語優勢時: 第1候補を英字にしつつ、ひらがな・カタカナも初期候補に必ず含める！
+            immediateList.add(raw)
+            if (initialKana.isNotEmpty() && initialKana != raw) {
+                immediateList.add(initialKana)
+            }
+            if (initialKatakana.isNotEmpty() && initialKatakana != initialKana && initialKatakana != raw) {
+                immediateList.add(initialKatakana)
+            }
+        } else {
+            // 日本語優勢時: 学習済み候補およびひらがな、英字を含める
+            val learnedList = learningStore.getLearnedCandidates(text)
+            immediateList.addAll(learnedList)
+            if (!immediateList.contains(text)) immediateList.add(text)
+            if (initialKatakana.isNotEmpty() && !immediateList.contains(initialKatakana)) immediateList.add(initialKatakana)
+            if (!immediateList.contains(raw)) immediateList.add(raw)
+        }
 
         candidates = immediateList
         selectedCandidateIndex = 0
 
-        // Google CGI による高精度かな漢字変換
-        converter.convertAsync(text).thenAccept { resultList ->
+        // Google CGI / 辞書 による高精度かな漢字変換（英語判定時も日本語候補を取得して共存させる！）
+        val convertTarget = if (isEnglishDominant && initialKana.isNotEmpty()) initialKana else text
+        converter.convertAsync(convertTarget).thenAccept { resultList ->
             synchronized(lock) {
                 if (rawBuffer.isNotEmpty()) {
-                    val ranked = learningStore.rankCandidates(text, resultList)
-                    val list = ranked.take(MeltypeConfig.maxCandidates).toMutableList()
-                    if (!list.contains(text)) list.add(text)
-                    if (!list.contains(raw)) list.add(raw)
+                    val fullList = mutableListOf<String>()
+                    if (isEnglishDominant) {
+                        fullList.add(raw) // 第1候補: 英語
+                        fullList.addAll(resultList) // 第2候補以降: 漢字・カタカナ等
+                        if (!fullList.contains(initialKana)) fullList.add(initialKana)
+                        if (!fullList.contains(initialKatakana)) fullList.add(initialKatakana)
+                    } else {
+                        val ranked = learningStore.rankCandidates(text, resultList)
+                        fullList.addAll(ranked)
+                        if (!fullList.contains(text)) fullList.add(text)
+                        if (initialKatakana.isNotEmpty() && !fullList.contains(initialKatakana)) fullList.add(initialKatakana)
+                        if (!fullList.contains(raw)) fullList.add(raw)
+                    }
 
+                    val list = fullList.distinct().take(MeltypeConfig.maxCandidates).toMutableList()
                     candidates = list
                     if (selectedCandidateIndex !in candidates.indices) {
                         selectedCandidateIndex = 0
@@ -566,7 +596,7 @@ class MeltypeSession(
         // 即座に初期プレビュー候補を生成
         val immediateSentence = tokens.joinToString(" ") { token ->
             if (token.isEmpty()) ""
-            else if (token.length >= 3 && englishDetector.isWord(token)) token
+            else if (scoreEngine.isPureEnglishWord(token)) token
             else {
                 val compound = compoundWordSplitter.split(token)
                 if (compound != null) "${compound.english}${compound.japaneseKana}"
@@ -584,7 +614,7 @@ class MeltypeSession(
                     val best = res.firstOrNull() ?: compound.japaneseKana
                     listOf("${compound.english}$best")
                 }.exceptionally { listOf("${compound.english}${compound.japaneseKana}") }
-            } else if (token.isEmpty() || (token.length >= 3 && englishDetector.isWord(token)) || scoreEngine.evaluate(token, isFinal = true).verdict == Verdict.ENGLISH) {
+            } else if (token.isEmpty() || scoreEngine.isPureEnglishWord(token) || scoreEngine.evaluate(token, isFinal = true).verdict == Verdict.ENGLISH) {
                 java.util.concurrent.CompletableFuture.completedFuture(listOf(token))
             } else {
                 val kana = romajiDetector.toKanaLenient(token)
@@ -632,7 +662,7 @@ class MeltypeSession(
                         } catch (_: Throwable) {
                             DetectionResult(Verdict.JAPANESE, 1, 0, "fallback")
                         }
-                        if (eval.verdict == Verdict.ENGLISH || (rawStr.length >= 3 && englishDetector.isWord(rawStr))) {
+                        if (eval.verdict == Verdict.ENGLISH && scoreEngine.isPureEnglishWord(rawStr)) {
                             rawStr
                         } else {
                             previewKana
