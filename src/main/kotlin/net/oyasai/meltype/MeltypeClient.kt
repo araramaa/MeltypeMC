@@ -93,14 +93,19 @@ object MeltypeClient : ClientModInitializer {
             }
         })
 
-        // マウスクリックイベント（インジケータークリックでの入力モード切り替え）
+        // マウスクリックイベント（インジケータークリックでの入力モード切り替え / 右クリックで設定画面）
         ScreenMouseEvents.allowMouseClick(screen).register(ScreenMouseEvents.AllowMouseClick { s, mouseButtonEvent ->
             try {
-                if (mouseButtonEvent.button() == 0) { // 左クリック
-                    if (CompositionRenderer.isIndicatorClicked(s, mouseButtonEvent.x(), mouseButtonEvent.y())) {
+                if (CompositionRenderer.isIndicatorClicked(s, mouseButtonEvent.x(), mouseButtonEvent.y())) {
+                    if (mouseButtonEvent.button() == 0) { // 左クリック: 入力モード切替
                         session.toggleInputMode { commitText ->
                             insertTextToScreen(s, commitText)
                         }
+                        return@AllowMouseClick false // クリックを消費
+                    } else if (mouseButtonEvent.button() == 1) { // 右クリック: 設定メニューを開く
+                        net.minecraft.client.Minecraft.getInstance().setScreenAndShow(
+                            net.oyasai.meltype.gui.MeltypeConfigScreen(s, session.learningStore)
+                        )
                         return@AllowMouseClick false // クリックを消費
                     }
                 }

@@ -446,4 +446,32 @@ class MeltypeEngineTest {
         session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, insertToChat)
         assertEquals("きょうは", committed[0])
     }
+
+    /**
+     * 設定の保存と読み込みテスト
+     */
+    @Test
+    fun testMeltypeConfigPersistence() {
+        val originalCandidates = MeltypeConfig.maxCandidates
+        val originalInitialMode = MeltypeConfig.initialInputMode
+
+        try {
+            MeltypeConfig.maxCandidates = 7
+            MeltypeConfig.initialInputMode = InputMode.HYBRID
+            MeltypeConfig.save()
+
+            // 変更が保持されていること
+            assertEquals(7, MeltypeConfig.maxCandidates)
+            assertEquals(InputMode.HYBRID, MeltypeConfig.initialInputMode)
+
+            // 再ロード
+            MeltypeConfig.load()
+            assertEquals(7, MeltypeConfig.maxCandidates)
+            assertEquals(InputMode.HYBRID, MeltypeConfig.initialInputMode)
+        } finally {
+            MeltypeConfig.maxCandidates = originalCandidates
+            MeltypeConfig.initialInputMode = originalInitialMode
+            MeltypeConfig.save()
+        }
+    }
 }

@@ -224,8 +224,8 @@ object CompositionRenderer {
         // ホバーツールチップ
         if (isHovered) {
             val tooltipText = when (mode) {
-                InputMode.DIRECT -> "半角英数 (クリックで日本語に切替)"
-                InputMode.HYBRID -> "日本語変換 (クリックで半角に切替)"
+                InputMode.DIRECT -> "半角英数 (左クリック: 日本語切替 / 右クリック: 設定)"
+                InputMode.HYBRID -> "日本語変換 (左クリック: 半角切替 / 右クリック: 設定)"
             }
             val ttW = font.width(tooltipText) + 8
             val ttX = btnX.coerceAtMost(screen.width - ttW - 4)
