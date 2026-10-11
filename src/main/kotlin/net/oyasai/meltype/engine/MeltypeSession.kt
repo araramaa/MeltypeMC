@@ -311,9 +311,9 @@ class MeltypeSession(
                     // 単語の英日判定（スペース押下時に即時同期判定）
                     val eval = scoreEngine.evaluate(currentRaw, isFinal = true)
 
-                    // ★英単語判定（例: "diamond", "apple", "test" 等）
+                    // ★英単語判定（例: "diamond", "apple", "test" 等: 3文字以上）
                     // 漢字変換候補ウィンドウは出さず、英単語＋半角スペースとして即座に確定！
-                    if (eval.verdict == Verdict.ENGLISH || englishDetector.isWord(currentRaw)) {
+                    if (eval.verdict == Verdict.ENGLISH || (currentRaw.length >= 3 && englishDetector.isWord(currentRaw))) {
                         insertToChat("$currentRaw ")
                         reset()
                         return true
@@ -424,7 +424,7 @@ class MeltypeSession(
         if (text.contains(' ')) {
             previewKana = text.split(' ').joinToString(" ") { token ->
                 if (token.isEmpty()) ""
-                else if (englishDetector.isWord(token)) token
+                else if (token.length >= 3 && englishDetector.isWord(token)) token
                 else {
                     val compound = compoundWordSplitter.split(token)
                     if (compound != null) "${compound.english} ${compound.japaneseKana}"
@@ -441,9 +441,9 @@ class MeltypeSession(
             return
         }
 
-        // 英単語辞書完全一致、または英語判定の場合は英語のままプレビュー！
+        // 英単語辞書完全一致（3文字以上）、または英語判定の場合は英語のままプレビュー！
         val eval = scoreEngine.evaluate(text, isFinal = false)
-        if (eval.verdict == Verdict.ENGLISH || englishDetector.isWord(text)) {
+        if (eval.verdict == Verdict.ENGLISH || (text.length >= 3 && englishDetector.isWord(text))) {
             previewKana = text
             return
         }
@@ -485,7 +485,7 @@ class MeltypeSession(
         }
 
         // 英語スコアが優勢な場合は英字を第1候補に
-        if (eval.verdict == Verdict.ENGLISH || englishDetector.isWord(raw)) {
+        if (eval.verdict == Verdict.ENGLISH || (raw.length >= 3 && englishDetector.isWord(raw))) {
             candidates = listOf(raw)
             selectedCandidateIndex = 0
             return
@@ -566,7 +566,7 @@ class MeltypeSession(
         // 即座に初期プレビュー候補を生成
         val immediateSentence = tokens.joinToString(" ") { token ->
             if (token.isEmpty()) ""
-            else if (englishDetector.isWord(token)) token
+            else if (token.length >= 3 && englishDetector.isWord(token)) token
             else {
                 val compound = compoundWordSplitter.split(token)
                 if (compound != null) "${compound.english}${compound.japaneseKana}"
@@ -584,7 +584,7 @@ class MeltypeSession(
                     val best = res.firstOrNull() ?: compound.japaneseKana
                     listOf("${compound.english}$best")
                 }.exceptionally { listOf("${compound.english}${compound.japaneseKana}") }
-            } else if (token.isEmpty() || englishDetector.isWord(token) || scoreEngine.evaluate(token, isFinal = true).verdict == Verdict.ENGLISH) {
+            } else if (token.isEmpty() || (token.length >= 3 && englishDetector.isWord(token)) || scoreEngine.evaluate(token, isFinal = true).verdict == Verdict.ENGLISH) {
                 java.util.concurrent.CompletableFuture.completedFuture(listOf(token))
             } else {
                 val kana = romajiDetector.toKanaLenient(token)
@@ -632,7 +632,7 @@ class MeltypeSession(
                         } catch (_: Throwable) {
                             DetectionResult(Verdict.JAPANESE, 1, 0, "fallback")
                         }
-                        if (eval.verdict == Verdict.ENGLISH || englishDetector.isWord(rawStr)) {
+                        if (eval.verdict == Verdict.ENGLISH || (rawStr.length >= 3 && englishDetector.isWord(rawStr))) {
                             rawStr
                         } else {
                             previewKana

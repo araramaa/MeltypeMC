@@ -531,4 +531,83 @@ class MeltypeEngineTest {
         assertTrue(committed.isEmpty(), "チャット欄へ「ima 」として勝手に確定出力されないこと")
         assertTrue(session.candidates.contains("いま"), "候補リストに読みが含まれること")
     }
+
+    /**
+     * 助詞や短音節「は (ha)」「へ (he)」「と (to)」「の (no)」「め (me)」など、
+     * 英語辞書にも存在する2文字単語が誤って英語判定されず、日本語として判定・変換されることの検証
+     */
+    @Test
+    fun testJapaneseParticlesAndShortSyllablesEvaluation() {
+        // ha, he, to, no, me, so, do, go, in, on は英語辞書に存在しうるが、日本語として判定されること
+        for (particle in listOf("ha", "he", "to", "no", "me", "so", "do", "go", "in", "on")) {
+            val res = scoreEngine.evaluate(particle, isFinal = true)
+            assertEquals(Verdict.JAPANESE, res.verdict, "$particle は確定時に日本語判定されること")
+        }
+    }
+
+    /**
+     * 「ha」と入力した時のプレビューが「は」であり、Spaceを押した際に「ha 」とならず、
+     * 正常に変換候補が表示されることの検証
+     */
+    @Test
+    fun testHaTypingSession() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // "ha" とタイプ
+        for (c in "ha") {
+            session.onCharTyped(c, "", insertToChat)
+        }
+
+        // 入力中プレビューが「ha」ではなく「は」になっていること！
+        assertEquals("は", session.previewKana)
+
+        // Space を押す -> 「ha 」と確定されず、変換候補ウィンドウが表示されること！
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates, "Space押下時に変換候補が表示されること")
+        assertTrue(committed.isEmpty(), "チャット欄へ「ha 」として勝手に確定出力されないこと")
+        assertTrue(session.candidates.contains("は"), "候補リストに読みが含まれること")
+    }
+
+    /**
+     * 「douro (どうろ)」が英単語「dour」＋助詞「o」に誤爆分割されず、
+     * 正常に「どうろ」としてプレビューおよび変換候補が表示されることの検証
+     */
+    @Test
+    fun testDouroTypingSession() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // "douro" とタイプ
+        for (c in "douro") {
+            session.onCharTyped(c, "", insertToChat)
+        }
+
+        // 入力中プレビューが「dour お」ではなく「どうろ」になっていること！
+        assertEquals("どうろ", session.previewKana)
+
+        // Space を押す -> 「dourお」とならず、変換候補ウィンドウが表示されること！
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates, "Space押下時に変換候補が表示されること")
+        assertTrue(committed.isEmpty(), "勝手にチャット欄へ確定出力されないこと")
+        assertTrue(session.candidates.contains("どうろ"), "候補リストに「どうろ」が含まれること")
+    }
 }

@@ -34,9 +34,10 @@ class CompoundWordSplitter(
         /**
          * 日本語の助詞・助動詞などのプレフィックス
          * 英単語の直後にこれら（てにをは等）が結合していることを厳密に判定
+         * ※単一母音 'o' は douro や sono 等のローマ字末尾と誤爆するため含めない（助詞「を」は "wo"）
          */
         private val ParticlePrefixes = listOf(
-            "wo", "o", "ga", "wa", "ha", "no", "ni", "de", "to", "mo", "he",
+            "wo", "ga", "wa", "ha", "no", "ni", "de", "to", "mo", "he",
             "te", "kara", "made", "yori", "dake", "demo", "nara", "da", "desu"
         )
     }
@@ -47,7 +48,7 @@ class CompoundWordSplitter(
      * @return 分割できた場合は CompoundSplit、分割できない場合は null
      */
     fun split(raw: String): CompoundSplit? {
-        if (raw.length < 4) return null // 最低でも英単語3文字 + 日本語1文字以上
+        if (raw.length < 5) return null // 最低でも英単語3文字 + 助詞2文字（wo, ni, de 等）以上
 
         val lower = raw.lowercase()
 
