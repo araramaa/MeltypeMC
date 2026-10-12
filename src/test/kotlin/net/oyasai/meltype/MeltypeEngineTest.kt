@@ -850,5 +850,60 @@ class MeltypeEngineTest {
         assertFalse(scoreEngine.isEnglishInput("dourou"))
         assertFalse(scoreEngine.isEnglishInput("kyouha"))
     }
+
+    /**
+     * "kyouhadiamondwotoriniikou" が助詞「は」「を」を手がかりに
+     * 「きょうは」+「diamond」+「をとりにいこう」に自動分割されることの検証
+     */
+    @Test
+    fun testSplitSentenceMultiCompound() {
+        val splitter = CompoundWordSplitter(englishDetector, romajiDetector)
+        val split = splitter.splitSentence("kyouhadiamondwotoriniikou")
+
+        assertNotNull(split)
+        assertEquals(3, split!!.segments.size)
+        assertEquals("きょうは", split.segments[0].reading)
+        assertFalse(split.segments[0].isEnglish)
+        assertEquals("diamond", split.segments[1].reading)
+        assertTrue(split.segments[1].isEnglish)
+        assertEquals("をとりにいこう", split.segments[2].reading)
+        assertFalse(split.segments[2].isEnglish)
+
+        assertEquals("きょうは diamond をとりにいこう", split.previewText)
+    }
+
+    /**
+     * スペースなし一括入力 "kyouhadiamondwotoriniikou" のプレビューおよび変換の検証
+     * 「今日はdiamondを取りに行こう」が第1候補として合成されること
+     */
+    @Test
+    fun testKyouhaDiamondWoToriniikouFullFlow() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // スペースなしで一括タイプ
+        for (c in "kyouhadiamondwotoriniikou") session.onCharTyped(c, "", insertToChat)
+
+        // プレビューが「きょうは diamond をとりにいこう」と表示されること！
+        assertEquals("きょうは diamond をとりにいこう", session.previewKana)
+
+        // 変換を実行
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates)
+
+        // 候補リストに英単語 "diamond" を含んだ文が含まれていること！
+        assertTrue(session.candidates.any { it.contains("diamond") })
+        // 最初に入力した文字列そのままでも選択可能なこと！
+        assertTrue(session.candidates.contains("kyouhadiamondwotoriniikou"))
+    }
 }
 

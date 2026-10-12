@@ -304,8 +304,13 @@ class MeltypeSession(
                         return true
                     }
 
-                    // ★英単語＋助詞/日本語の複合語判定（例: "diamondwosagasou"）
-                    // 英単語の直後に助詞が連続している場合は、即時英語確定ではなく複合語変換を行う
+                    // ★英単語＋助詞/日本語の複合語・ハイブリッド文判定（例: "kyouhadiamondwotoriniikou", "diamondwosagasou"）
+                    val multiCompound = compoundWordSplitter.splitSentence(currentRaw)
+                    if (multiCompound != null) {
+                        triggerMultiCompoundConversion(multiCompound, currentRaw)
+                        return true
+                    }
+
                     val compound = compoundWordSplitter.split(currentRaw)
                     if (compound != null) {
                         triggerCompoundConversion(compound, currentRaw)
@@ -509,6 +514,13 @@ class MeltypeSession(
             return
         }
 
+        // 複合語・ハイブリッド文判定（例: "kyouhadiamondwotoriniikou" -> "きょうはdiamondをとりにいこう"）
+        val multiCompound = compoundWordSplitter.splitSentence(text)
+        if (multiCompound != null) {
+            previewKana = multiCompound.previewText
+            return
+        }
+
         // 英単語＋日本語の複合語判定（例: "diamondwosagasou" -> "diamond をさがそう"）
         val compound = compoundWordSplitter.split(text)
         if (compound != null) {
@@ -544,14 +556,21 @@ class MeltypeSession(
             return
         }
 
-        // 2. 英単語＋助詞/日本語の複合語（例: "diamondwosagasou" -> "diamondを探そう"）の処理
+        // 2. 複合語・ハイブリッド文（例: "kyouhadiamondwotoriniikou" -> "今日はdiamondを取りに行こう"）
+        val multiCompound = compoundWordSplitter.splitSentence(raw)
+        if (multiCompound != null) {
+            triggerMultiCompoundConversion(multiCompound, raw)
+            return
+        }
+
+        // 3. 英単語＋助詞/日本語の複合語（例: "diamondwosagasou" -> "diamondを探そう"）の処理
         val compound = compoundWordSplitter.split(raw)
         if (compound != null) {
             triggerCompoundConversion(compound, raw)
             return
         }
 
-        // 3. 単一単語の処理
+        // 4. 単一単語の処理
         val isEnglishDominant = scoreEngine.isEnglishInput(raw)
         val initialKana = romajiDetector.toKanaLenient(raw)
         val initialKatakana = romajiDetector.toKatakana(initialKana)
@@ -608,6 +627,59 @@ class MeltypeSession(
                     if (selectedCandidateIndex !in candidates.indices) {
                         selectedCandidateIndex = 0
                     }
+                }
+            }
+        }.exceptionally {
+            null
+        }
+    }
+
+    /**
+     * 複数セグメントからなるハイブリッド文（例: "kyouhadiamondwotoriniikou" -> "今日はdiamondを取りに行こう"）の変換
+     * 各日本語セグメントを Google CGI / 辞書 で変換し、英語セグメントと結合して候補を生成
+     */
+    private fun triggerMultiCompoundConversion(split: MultiCompoundSplit, raw: String) {
+        val preview = split.previewText
+        activeReading = preview
+        activeRaw = raw
+
+        // 即座に応答可能な初期候補
+        val immediateList = listOf(split.noSpaceText, split.previewText, raw).distinct().toMutableList()
+        candidates = immediateList
+        selectedCandidateIndex = 0
+
+        // 各セグメントの変換 Future
+        val segmentFutures = split.segments.map { segment ->
+            if (segment.isEnglish) {
+                java.util.concurrent.CompletableFuture.completedFuture(listOf(segment.raw))
+            } else {
+                converter.convertAsync(segment.reading).thenApply { res ->
+                    if (res.isNotEmpty()) res else listOf(segment.reading)
+                }.exceptionally { listOf(segment.reading) }
+            }
+        }
+
+        val allFutures = java.util.concurrent.CompletableFuture.allOf(*segmentFutures.toTypedArray())
+        allFutures.thenAccept {
+            synchronized(lock) {
+                if (rawBuffer.isNotEmpty()) {
+                    val segmentResults = segmentFutures.map { it.get() }
+                    // 第1候補: スペースなし結合（例: "今日はdiamondを取りに行こう"）
+                    val synthesizedNoSpace = split.segments.mapIndexed { idx, seg ->
+                        if (seg.isEnglish) seg.raw else segmentResults[idx].firstOrNull() ?: seg.reading
+                    }.joinToString("")
+
+                    // 第2候補: 英単語の周囲にスペースを入れた結合（例: "今日は diamond を取りに行こう"）
+                    val synthesizedSpaced = split.segments.mapIndexed { idx, seg ->
+                        if (seg.isEnglish) " ${seg.raw} " else segmentResults[idx].firstOrNull() ?: seg.reading
+                    }.joinToString("").replace("  ", " ").trim()
+
+                    val fullList = mutableListOf(synthesizedNoSpace, synthesizedSpaced)
+                    if (!fullList.contains(split.previewText)) fullList.add(split.previewText)
+                    if (!fullList.contains(raw)) fullList.add(raw)
+
+                    candidates = fullList.distinct().take(MeltypeConfig.maxCandidates).toMutableList()
+                    selectedCandidateIndex = 0
                 }
             }
         }.exceptionally {
@@ -717,19 +789,19 @@ class MeltypeSession(
                 hasCandidates -> candidates.getOrNull(selectedCandidateIndex) ?: candidates.firstOrNull() ?: previewKana
                 previewKana.isNotEmpty() -> {
                     val rawStr = rawBuffer.toString()
-                    val compound = compoundWordSplitter.split(rawStr)
-                    if (compound != null) {
-                        "${compound.english}${compound.japaneseKana}"
+                    val multiCompound = compoundWordSplitter.splitSentence(rawStr)
+                    if (multiCompound != null) {
+                        multiCompound.noSpaceText
                     } else {
-                        val eval = try {
-                            scoreEngine.evaluate(rawStr, isFinal = true)
-                        } catch (_: Throwable) {
-                            DetectionResult(Verdict.JAPANESE, 1, 0, "fallback")
-                        }
-                        if (eval.verdict == Verdict.ENGLISH && scoreEngine.isPureEnglishWord(rawStr)) {
-                            rawStr
+                        val compound = compoundWordSplitter.split(rawStr)
+                        if (compound != null) {
+                            "${compound.english}${compound.japaneseKana}"
                         } else {
-                            previewKana
+                            if (scoreEngine.isEnglishInput(rawStr)) {
+                                rawStr
+                            } else {
+                                previewKana
+                            }
                         }
                     }
                 }
