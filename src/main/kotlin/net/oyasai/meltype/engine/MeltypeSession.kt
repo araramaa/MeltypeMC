@@ -181,7 +181,7 @@ class MeltypeSession(
                     commitCurrent(insertToChat)
                 }
 
-                rawBuffer.append(c.lowercaseChar())
+                rawBuffer.append(c)
                 updatePreview()
                 return true
             }
@@ -312,13 +312,10 @@ class MeltypeSession(
                         return true
                     }
 
-                    // 単語の英日判定（スペース押下時に即時同期判定）
-                    val eval = scoreEngine.evaluate(currentRaw, isFinal = true)
-
-                    // ★純粋な英単語判定（例: "diamond", "apple", "test" 等）
+                    // ★英語判定（例: "diamond", "apple", "Modrinth", "curseforge" 等）
                     // 漢字変換候補ウィンドウは出さず、英単語＋半角スペースとして即座に確定！
                     // ※日本語日常語（sore, are, dare, sake 等）は日本語変換候補を表示！
-                    if (eval.verdict == Verdict.ENGLISH && scoreEngine.isPureEnglishWord(currentRaw)) {
+                    if (scoreEngine.isEnglishInput(currentRaw)) {
                         insertToChat("$currentRaw ")
                         reset()
                         return true
@@ -519,9 +516,8 @@ class MeltypeSession(
             return
         }
 
-        // 純粋な英単語、または英語判定の場合は英語のままプレビュー！
-        val eval = scoreEngine.evaluate(text, isFinal = false)
-        if (eval.verdict == Verdict.ENGLISH && scoreEngine.isPureEnglishWord(text)) {
+        // 英語（英単語辞書一致、ローマ字として無効な英字列、大文字を含む英字列等）は英語のままプレビュー！
+        if (scoreEngine.isEnglishInput(text)) {
             previewKana = text
             return
         }
@@ -556,13 +552,7 @@ class MeltypeSession(
         }
 
         // 3. 単一単語の処理
-        val eval = try {
-            scoreEngine.evaluate(raw, isFinal = true)
-        } catch (_: Throwable) {
-            DetectionResult(Verdict.UNDECIDED, 0, 0, "fallback")
-        }
-
-        val isEnglishDominant = eval.verdict == Verdict.ENGLISH && scoreEngine.isPureEnglishWord(raw)
+        val isEnglishDominant = scoreEngine.isEnglishInput(raw)
         val initialKana = romajiDetector.toKanaLenient(raw)
         val initialKatakana = romajiDetector.toKatakana(initialKana)
         val rawCandidate = raw

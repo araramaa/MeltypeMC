@@ -764,4 +764,91 @@ class MeltypeEngineTest {
         session.onKeyPressed(GLFW.GLFW_KEY_F6, 0, 0, insertToChat)
         assertEquals("てすと", session.candidates[0])
     }
+
+    /**
+     * "Modrinth" や "modrinth" を入力した際に「も」としか変換されないバグの修正検証
+     * プレビューが英語のまま維持され、スペースで直接確定、または候補表示で英単語が選べること
+     */
+    @Test
+    fun testModrinthInputDoesNotTruncateToMo() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // 1. "Modrinth" と入力
+        for (c in "Modrinth") session.onCharTyped(c, "", insertToChat)
+
+        // プレビューが「も」ではなく「Modrinth」であること！
+        assertEquals("Modrinth", session.previewKana)
+
+        // Enterで確定 -> "Modrinth" がそのまま確定挿入される！
+        session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, insertToChat)
+        assertEquals(1, committed.size)
+        assertEquals("Modrinth", committed[0])
+        assertFalse(session.isComposing)
+
+        // 2. スペースキーでの英単語自動確定（"Modrinth "）の検証
+        committed.clear()
+        for (c in "modrinth") session.onCharTyped(c, "", insertToChat)
+        assertEquals("modrinth", session.previewKana)
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertEquals("modrinth ", committed[0])
+        assertFalse(session.isComposing)
+
+        // 3. 下矢印キー（またはTabキー）で変換候補を開いた場合、英単語が第1候補にあること
+        committed.clear()
+        for (c in "Modrinth") session.onCharTyped(c, "", insertToChat)
+        session.onKeyPressed(GLFW.GLFW_KEY_DOWN, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates)
+        assertEquals("Modrinth", session.candidates[0])
+    }
+
+    /**
+     * toKanaLenient でローマ字にマッチしない子音や英字があっても、
+     * 「も」のように文字が途中で破棄・消失せず、すべての文字が保持されることの検証
+     */
+    @Test
+    fun testToKanaLenientDoesNotDropCharacters() {
+        val kanaModrinth = romajiDetector.toKanaLenient("modrinth")
+        // "も" だけにならず、"もdりんth" のように全文字が保持されること
+        assertEquals("もdりんth", kanaModrinth)
+
+        val kanaMinecraft = romajiDetector.toKanaLenient("minecraft")
+        assertTrue(kanaMinecraft.contains("みね"))
+        // 文字列長が極端に縮んで消失していないこと
+        assertTrue(kanaMinecraft.length >= 6)
+    }
+
+    /**
+     * scoreEngine.isEnglishInput による英単語・マイクラ用語・日本語日常語の判別検証
+     */
+    @Test
+    fun testIsEnglishInputAccuracy() {
+        // 英語・固有名詞・マイクラ用語
+        assertTrue(scoreEngine.isEnglishInput("modrinth"))
+        assertTrue(scoreEngine.isEnglishInput("Modrinth"))
+        assertTrue(scoreEngine.isEnglishInput("minecraft"))
+        assertTrue(scoreEngine.isEnglishInput("fabric"))
+        assertTrue(scoreEngine.isEnglishInput("diamond"))
+        assertTrue(scoreEngine.isEnglishInput("discord"))
+
+        // 日本語日常語・助詞（英語扱いになってはいけない単語）
+        assertFalse(scoreEngine.isEnglishInput("ima"))
+        assertFalse(scoreEngine.isEnglishInput("ha"))
+        assertFalse(scoreEngine.isEnglishInput("he"))
+        assertFalse(scoreEngine.isEnglishInput("sore"))
+        assertFalse(scoreEngine.isEnglishInput("are"))
+        assertFalse(scoreEngine.isEnglishInput("dare"))
+        assertFalse(scoreEngine.isEnglishInput("dourou"))
+        assertFalse(scoreEngine.isEnglishInput("kyouha"))
+    }
 }
+

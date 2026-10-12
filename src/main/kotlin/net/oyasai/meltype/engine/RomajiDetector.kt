@@ -206,14 +206,69 @@ class RomajiDetector {
 
     /**
      * 入力途中のローマ字をできる限りひらがなに変換する（入力プレビュー用）
+     * ローマ字として解釈できない子音や記号があっても文字を途中で破棄せず、
+     * 通常の日本語IMEと同様に英字を残したまま後続の文字の変換を継続します。
      */
     fun toKanaLenient(letters: String): String {
-        val analysis = analyze(letters)
+        if (letters.isEmpty()) return ""
+        val s = letters.lowercase()
         val sb = StringBuilder()
-        for (token in analysis.tokens) {
-            sb.append(token.kana)
+        var i = 0
+
+        while (i < s.length) {
+            val c = s[i]
+
+            // 英字以外・ハイフン以外はそのまま
+            if (c !in 'a'..'z' && c != '-') {
+                sb.append(c)
+                i += 1
+                continue
+            }
+
+            // 撥音 'n' の判定: "nn" または 次が子音（y以外）の場合
+            if (c == 'n' && i + 1 < s.length && (s[i + 1] == 'n' || (isConsonant(s[i + 1]) && s[i + 1] != 'y'))) {
+                val consumed = if (s[i + 1] == 'n') 2 else 1
+                sb.append("ん")
+                i += consumed
+                continue
+            }
+
+            // 促音の判定: 子音の連続 (kk, tt, ss など) または tch
+            if (i + 1 < s.length && isConsonant(c) && c != 'n' &&
+                (s[i + 1] == c || (c == 't' && s[i + 1] == 'c' && i + 2 < s.length && s[i + 2] == 'h'))
+            ) {
+                sb.append("っ")
+                i += 1
+                continue
+            }
+
+            // 最長一致検索 (4文字〜1文字)
+            var matched = false
+            val maxLen = minOf(4, s.length - i)
+            for (len in maxLen downTo 1) {
+                val piece = s.substring(i, i + len)
+                val kana = RomajiTable[piece]
+                if (kana != null) {
+                    sb.append(kana)
+                    i += len
+                    matched = true
+                    break
+                }
+            }
+            if (matched) continue
+
+            // 末尾がプレフィックス（入力途中子音）ならそのまま追加して完了
+            val rest = s.substring(i)
+            if (PartialPrefixes.contains(rest) || rest == "n" || rest == "tc") {
+                sb.append(rest)
+                break
+            }
+
+            // テーブルにマッチせず、かつプレフィックスでもない孤立子音・不正文字はそのまま出力し、次へ進む！
+            sb.append(c)
+            i += 1
         }
-        sb.append(analysis.partial)
+
         return sb.toString()
     }
 

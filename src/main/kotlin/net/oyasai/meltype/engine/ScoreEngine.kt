@@ -51,6 +51,33 @@ class ScoreEngine(
         return lower.length >= 3 && englishDetector.isWord(lower) && lower !in AmbiguousJapaneseWords
     }
 
+    /**
+     * 入力文字列が英語（英単語または英字列）として扱われるべきかを判定
+     * - 辞書に一致する純粋な英単語（3文字以上、例: diamond）
+     * - ローマ字として無効な並び（子音連続など）を持つ文字列（例: modrinth, discord, minecraft, fabric 等）
+     * - 大文字を含む英字列（例: Modrinth, Discord）
+     */
+    fun isEnglishInput(letters: String): Boolean {
+        if (letters.isEmpty()) return false
+        val lower = letters.lowercase()
+        // 日本語日常語（sore, are, dare, ima 等）は日本語
+        if (lower in AmbiguousJapaneseWords) return false
+        // 1〜2文字の有効なローマ字（ha, he, to, no 等）は日本語
+        if (lower.length <= 2 && romajiDetector.analyze(lower).isValid) return false
+
+        // 1. 純粋な英単語（辞書一致）
+        if (isPureEnglishWord(lower)) return true
+
+        // 2. ローマ字として無効な並び（子音連続など、辞書外の英単語・固有名詞）
+        val analysis = romajiDetector.analyze(lower)
+        if (!analysis.isValid) return true
+
+        // 3. 大文字を含んでいる（例: Modrinth, Fabric, Discord）
+        if (letters.any { it in 'A'..'Z' }) return true
+
+        return false
+    }
+
     fun evaluate(letters: String, isFinal: Boolean = false): DetectionResult {
         if (letters.isEmpty()) {
             return DetectionResult(Verdict.UNDECIDED, 0, 0, "入力なし")
@@ -128,6 +155,11 @@ class ScoreEngine(
         // 3. 判定ロジック
         if (!analysis.isValid) {
             return DetectionResult(Verdict.ENGLISH, japaneseScore, englishScore, "ローマ字として無効")
+        }
+
+        // 大文字を含む英字列（例: Modrinth, Fabric, Discord）は英語確定
+        if (letters.any { it in 'A'..'Z' } && !isAmbiguousJapanese) {
+            return DetectionResult(Verdict.ENGLISH, japaneseScore, englishScore + 10, "大文字を含む英単語")
         }
 
         // 日本語スコアが閾値を超え、かつ英語スコアとの差が閾値以上
