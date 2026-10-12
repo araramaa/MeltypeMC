@@ -905,5 +905,40 @@ class MeltypeEngineTest {
         // 最初に入力した文字列そのままでも選択可能なこと！
         assertTrue(session.candidates.contains("kyouhadiamondwotoriniikou"))
     }
+
+    /**
+     * "ohayou" が "you"（英語）に誤分割されて「おはyou」になってしまわず、
+     * 「おはよう」としてプレビューおよび変換され、かつ原文 "ohayou" も候補に含まれることの検証
+     */
+    @Test
+    fun testOhayouInputDoesNotSplitToYou() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // "ohayou" と入力
+        for (c in "ohayou") session.onCharTyped(c, "", insertToChat)
+
+        // プレビューが「おはyou」ではなく「おはよう」であること！
+        assertEquals("おはよう", session.previewKana)
+
+        // 変換を実行
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates)
+
+        // 候補に「おはよう」が含まれていること！
+        assertTrue(session.candidates.contains("おはよう"))
+        // 原文「ohayou」が必ず候補に含まれていて選択できること！
+        assertTrue(session.candidates.contains("ohayou"), "原文 ohayou が候補に含まれること")
+    }
 }
+
 

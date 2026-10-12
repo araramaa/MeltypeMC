@@ -39,7 +39,8 @@ class ScoreEngine(
             "kome", "mono", "koto", "shite", "shita", "demo", "doko", "nani",
             "soko", "koko", "haka", "mori", "kami", "kaze", "tsuki", "hoshi",
             "machi", "michi", "kane", "ame", "asa", "hiru", "yoru", "hana",
-            "kawa", "yama", "kiri", "sora", "ima", "ano", "kono", "sono"
+            "kawa", "yama", "kiri", "sora", "ima", "ano", "kono", "sono",
+            "ohayou", "arigatou", "you"
         )
     }
 

@@ -57,7 +57,8 @@ class CompoundWordSplitter(
          */
         private val AmbiguousWords = setOf(
             "an", "in", "on", "at", "to", "no", "is", "he", "me", "do", "go",
-            "so", "my", "by", "us", "am", "it", "as", "if", "or",
+            "so", "my", "by", "us", "am", "it", "as", "if", "or", "you", "tou",
+            "sou", "kou", "kai", "dai", "mai", "tai", "sai", "kan", "man", "tan",
             "ano", "ima", "asa", "sora", "hana", "kawa", "yama", "kiri", "ame",
             "mori", "kami", "machi", "michi", "kaze", "tsuki", "hoshi", "kane",
             "saga", "sagas", "date", "mine", "fine", "line", "sore", "are", "dare", "tame"
@@ -143,9 +144,12 @@ class CompoundWordSplitter(
                 // before がある場合:
                 // - ローマ字として有効であること
                 // - 未完了子音（partial）がないこと
+                // - 末尾が助詞（てにをは等）で終わっていること！
                 if (before.isNotEmpty()) {
                     val beforeAnalysis = romajiDetector.analyze(before)
                     if (!beforeAnalysis.isValid || beforeAnalysis.partial.isNotEmpty()) continue
+                    val endsWithParticle = ParticlePrefixes.any { before.endsWith(it) }
+                    if (!endsWithParticle) continue
                 }
 
                 // after がある場合:

@@ -615,15 +615,7 @@ class MeltypeSession(
                         if (!fullList.contains(rawCandidate)) fullList.add(rawCandidate)
                     }
 
-                    // 最大表示数（数字キー1〜9で直接選択可能な 7〜9 件、rawCandidate が必ず含まれる件数）
-                    val maxCount = maxOf(MeltypeConfig.maxCandidates, 7).coerceAtMost(9)
-                    val distinct = fullList.distinct().toMutableList()
-                    // 万が一 rawCandidate が maxCount 外にはみ出そうな場合は末尾に押し戻して必ず保持
-                    if (!distinct.take(maxCount).contains(rawCandidate) && distinct.contains(rawCandidate)) {
-                        distinct.remove(rawCandidate)
-                        distinct.add(maxCount - 1, rawCandidate)
-                    }
-                    candidates = distinct.take(maxCount).toMutableList()
+                    candidates = finalizeCandidates(fullList, rawCandidate, kanaCandidate)
                     if (selectedCandidateIndex !in candidates.indices) {
                         selectedCandidateIndex = 0
                     }
@@ -632,6 +624,33 @@ class MeltypeSession(
         }.exceptionally {
             null
         }
+    }
+
+    /**
+     * 候補リストに最初に入力した文字そのまま（raw）およびひらがな（kana）が必ず含まれることを保証し、
+     * 数字キー（1〜9）で直接選択可能な枠（最大7〜9件）に整える
+     */
+    private fun finalizeCandidates(
+        fullList: List<String>,
+        rawCandidate: String,
+        kanaCandidate: String? = null
+    ): MutableList<String> {
+        val distinct = fullList.distinct().toMutableList()
+        if (kanaCandidate != null && !distinct.contains(kanaCandidate)) {
+            distinct.add(kanaCandidate)
+        }
+        if (!distinct.contains(rawCandidate)) {
+            distinct.add(rawCandidate)
+        }
+
+        val maxCount = maxOf(MeltypeConfig.maxCandidates, 7).coerceAtMost(9)
+        // rawCandidate が maxCount 枠外にはみ出ないよう、末尾に必ず残す！
+        if (!distinct.take(maxCount).contains(rawCandidate)) {
+            distinct.remove(rawCandidate)
+            distinct.add(minOf(maxCount - 1, distinct.size), rawCandidate)
+        }
+
+        return distinct.take(maxCount).toMutableList()
     }
 
     /**
@@ -678,7 +697,7 @@ class MeltypeSession(
                     if (!fullList.contains(split.previewText)) fullList.add(split.previewText)
                     if (!fullList.contains(raw)) fullList.add(raw)
 
-                    candidates = fullList.distinct().take(MeltypeConfig.maxCandidates).toMutableList()
+                    candidates = finalizeCandidates(fullList, raw, split.previewText)
                     selectedCandidateIndex = 0
                 }
             }
@@ -709,11 +728,7 @@ class MeltypeSession(
                 if (rawBuffer.isNotEmpty()) {
                     val fullList = resultList.map { "${compound.english}$it" }
                     val ranked = learningStore.rankCandidates(raw, fullList)
-                    val list = ranked.take(MeltypeConfig.maxCandidates).toMutableList()
-                    if (!list.contains(initialKana)) list.add(initialKana)
-                    if (!list.contains(raw)) list.add(raw)
-
-                    candidates = list
+                    candidates = finalizeCandidates(ranked + listOf(initialKana), raw, initialKana)
                     selectedCandidateIndex = 0
                 }
             }
@@ -769,9 +784,7 @@ class MeltypeSession(
                     val synthesized1 = tokenCandidates.joinToString(" ") { it.firstOrNull() ?: "" }
                     val list = mutableListOf(synthesized1)
                     if (!list.contains(immediateSentence)) list.add(immediateSentence)
-                    if (!list.contains(rawSentence)) list.add(rawSentence)
-
-                    candidates = list
+                    candidates = finalizeCandidates(list, rawSentence, immediateSentence)
                     selectedCandidateIndex = 0
                 }
             }
