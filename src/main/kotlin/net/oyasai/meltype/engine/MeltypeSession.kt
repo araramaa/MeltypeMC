@@ -260,8 +260,12 @@ class MeltypeSession(
                 return true
             }
 
-            // 3. 無変換キー -> DIRECTモード
+            // 3. 無変換キー: 入力中は「ひらがな -> カタカナ -> 最初に入力した英字」を順にトグル選択！
             if (isMuhenkanKey(scanCode)) {
+                if (isComposing) {
+                    toggleMuhenkanCandidates()
+                    return true
+                }
                 setInputMode(InputMode.DIRECT, insertToChat)
                 return true
             }
@@ -326,8 +330,13 @@ class MeltypeSession(
                     return true
                 }
 
-                // Enter: 確定
+                // Enter: 確定 (Shift+Enter なら最初に入力した文字そのまま即座に確定挿入！)
                 GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> {
+                    val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
+                    if (shift && isComposing) {
+                        flushAsIs(insertToChat)
+                        return true
+                    }
                     commitCurrent(insertToChat)
                     return true
                 }
@@ -402,10 +411,70 @@ class MeltypeSession(
                         return selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_KP_1, insertToChat)
                     }
                 }
+
+                // F6〜F10: 無変換ショートカット（最初に入力した文字そのままの形式変換）
+                GLFW.GLFW_KEY_F6 -> {
+                    if (isComposing) {
+                        applyDirectCandidate(romajiDetector.toKanaLenient(rawBuffer.toString()))
+                        return true
+                    }
+                }
+                GLFW.GLFW_KEY_F7 -> {
+                    if (isComposing) {
+                        applyDirectCandidate(romajiDetector.toKatakana(romajiDetector.toKanaLenient(rawBuffer.toString())))
+                        return true
+                    }
+                }
+                GLFW.GLFW_KEY_F9 -> {
+                    if (isComposing) {
+                        applyDirectCandidate(romajiDetector.toZenkakuAlpha(rawBuffer.toString()))
+                        return true
+                    }
+                }
+                GLFW.GLFW_KEY_F10 -> {
+                    // F10: 最初に入力した半角アルファベットそのまま！
+                    if (isComposing) {
+                        applyDirectCandidate(rawBuffer.toString())
+                        return true
+                    }
+                }
             }
 
             return false
         }
+    }
+
+    /**
+     * 無変換トグル（ひらがな -> カタカナ -> 最初に入力した半角英字）
+     */
+    private fun toggleMuhenkanCandidates() {
+        if (!isComposing) return
+        val raw = rawBuffer.toString()
+        val kana = romajiDetector.toKanaLenient(raw)
+        val kata = romajiDetector.toKatakana(kana)
+        val modes = listOf(kana, kata, raw).distinct()
+
+        val curSelected = candidates.getOrNull(selectedCandidateIndex)
+        val nextIdx = if (curSelected != null && modes.contains(curSelected)) {
+            (modes.indexOf(curSelected) + 1) % modes.size
+        } else {
+            0
+        }
+        candidates = modes
+        selectedCandidateIndex = nextIdx
+    }
+
+    /**
+     * F6〜F10 による直接変換候補の即時適用
+     */
+    private fun applyDirectCandidate(text: String) {
+        val raw = rawBuffer.toString()
+        val kana = romajiDetector.toKanaLenient(raw)
+        val list = mutableListOf(text)
+        if (!list.contains(raw)) list.add(raw)
+        if (!list.contains(kana)) list.add(kana)
+        candidates = list
+        selectedCandidateIndex = 0
     }
 
     private fun selectCandidateByIndex(index: Int, insertToChat: (String) -> Unit): Boolean {
@@ -496,51 +565,56 @@ class MeltypeSession(
         val isEnglishDominant = eval.verdict == Verdict.ENGLISH && scoreEngine.isPureEnglishWord(raw)
         val initialKana = romajiDetector.toKanaLenient(raw)
         val initialKatakana = romajiDetector.toKatakana(initialKana)
+        val rawCandidate = raw
+        val kanaCandidate = if (initialKana.isNotEmpty()) initialKana else raw
+        val katakanaCandidate = if (initialKatakana.isNotEmpty() && initialKatakana != initialKana) initialKatakana else null
 
-        // 即座に応答可能な初期候補をセット
+        // 即座に応答可能な初期候補をセット（★最初に入力した文字そのまま選べるように常時確保）
         val immediateList = mutableListOf<String>()
         if (isEnglishDominant) {
-            // 英語優勢時: 第1候補を英字にしつつ、ひらがな・カタカナも初期候補に必ず含める！
-            immediateList.add(raw)
-            if (initialKana.isNotEmpty() && initialKana != raw) {
-                immediateList.add(initialKana)
-            }
-            if (initialKatakana.isNotEmpty() && initialKatakana != initialKana && initialKatakana != raw) {
-                immediateList.add(initialKatakana)
-            }
+            immediateList.add(rawCandidate)
+            if (kanaCandidate != rawCandidate) immediateList.add(kanaCandidate)
+            if (katakanaCandidate != null && katakanaCandidate != rawCandidate) immediateList.add(katakanaCandidate)
         } else {
-            // 日本語優勢時: 学習済み候補およびひらがな、英字を含める
             val learnedList = learningStore.getLearnedCandidates(text)
             immediateList.addAll(learnedList)
-            if (!immediateList.contains(text)) immediateList.add(text)
-            if (initialKatakana.isNotEmpty() && !immediateList.contains(initialKatakana)) immediateList.add(initialKatakana)
-            if (!immediateList.contains(raw)) immediateList.add(raw)
+            if (!immediateList.contains(kanaCandidate)) immediateList.add(kanaCandidate)
+            if (katakanaCandidate != null && !immediateList.contains(katakanaCandidate)) immediateList.add(katakanaCandidate)
+            if (!immediateList.contains(rawCandidate)) immediateList.add(rawCandidate)
         }
 
-        candidates = immediateList
+        candidates = immediateList.distinct().take(9).toMutableList()
         selectedCandidateIndex = 0
 
-        // Google CGI / 辞書 による高精度かな漢字変換（英語判定時も日本語候補を取得して共存させる！）
+        // Google CGI / 辞書 による高精度かな漢字変換（最初に入力した英字・かなを必ず候補に保持！）
         val convertTarget = if (isEnglishDominant && initialKana.isNotEmpty()) initialKana else text
         converter.convertAsync(convertTarget).thenAccept { resultList ->
             synchronized(lock) {
                 if (rawBuffer.isNotEmpty()) {
                     val fullList = mutableListOf<String>()
                     if (isEnglishDominant) {
-                        fullList.add(raw) // 第1候補: 英語
+                        fullList.add(rawCandidate) // 第1候補: 英語
                         fullList.addAll(resultList) // 第2候補以降: 漢字・カタカナ等
-                        if (!fullList.contains(initialKana)) fullList.add(initialKana)
-                        if (!fullList.contains(initialKatakana)) fullList.add(initialKatakana)
+                        if (!fullList.contains(kanaCandidate)) fullList.add(kanaCandidate)
+                        if (katakanaCandidate != null && !fullList.contains(katakanaCandidate)) fullList.add(katakanaCandidate)
                     } else {
                         val ranked = learningStore.rankCandidates(text, resultList)
                         fullList.addAll(ranked)
-                        if (!fullList.contains(text)) fullList.add(text)
-                        if (initialKatakana.isNotEmpty() && !fullList.contains(initialKatakana)) fullList.add(initialKatakana)
-                        if (!fullList.contains(raw)) fullList.add(raw)
+                        if (!fullList.contains(kanaCandidate)) fullList.add(kanaCandidate)
+                        if (katakanaCandidate != null && !fullList.contains(katakanaCandidate)) fullList.add(katakanaCandidate)
+                        // ★最初に入力したアルファベットそのままを必ず候補に含める！
+                        if (!fullList.contains(rawCandidate)) fullList.add(rawCandidate)
                     }
 
-                    val list = fullList.distinct().take(MeltypeConfig.maxCandidates).toMutableList()
-                    candidates = list
+                    // 最大表示数（数字キー1〜9で直接選択可能な 7〜9 件、rawCandidate が必ず含まれる件数）
+                    val maxCount = maxOf(MeltypeConfig.maxCandidates, 7).coerceAtMost(9)
+                    val distinct = fullList.distinct().toMutableList()
+                    // 万が一 rawCandidate が maxCount 外にはみ出そうな場合は末尾に押し戻して必ず保持
+                    if (!distinct.take(maxCount).contains(rawCandidate) && distinct.contains(rawCandidate)) {
+                        distinct.remove(rawCandidate)
+                        distinct.add(maxCount - 1, rawCandidate)
+                    }
+                    candidates = distinct.take(maxCount).toMutableList()
                     if (selectedCandidateIndex !in candidates.indices) {
                         selectedCandidateIndex = 0
                     }

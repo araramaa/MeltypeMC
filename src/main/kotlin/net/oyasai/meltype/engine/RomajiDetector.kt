@@ -225,4 +225,20 @@ class RomajiDetector {
             if (c in '\u3041'..'\u3096') c + 0x60 else c
         }.joinToString("")
     }
+
+    /**
+     * 半角英数字・記号列を全角英数字に変換する
+     */
+    fun toZenkakuAlpha(str: String): String {
+        return str.map { c ->
+            when (c) {
+                in 'a'..'z' -> (c.code - 'a'.code + 0xFF41).toChar()
+                in 'A'..'Z' -> (c.code - 'A'.code + 0xFF21).toChar()
+                in '0'..'9' -> (c.code - '0'.code + 0xFF10).toChar()
+                ' ' -> '　'
+                '-' -> '－'
+                else -> c
+            }
+        }.joinToString("")
+    }
 }

@@ -674,4 +674,94 @@ class MeltypeEngineTest {
         assertTrue(session.candidates.contains("diamond"), "第1候補に英語が含まれること")
         assertTrue(session.candidates.any { it != "diamond" }, "英語以外の日本語候補（カタカナ・ひらがな等）が含まれること")
     }
+
+    /**
+     * 変換候補リストの中に、最初に入力したアルファベット（raw）が必ず含まれており、
+     * 漢字変換以外に最初の文字をそのまま選べることの検証
+     */
+    @Test
+    fun testRawInputSelectableInCandidates() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // "kyouha" とタイプして Space で変換
+        for (c in "kyouha") session.onCharTyped(c, "", insertToChat)
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+
+        assertTrue(session.hasCandidates)
+        // 候補リストに、最初に入力した英字 "kyouha" が必ず含まれていること！
+        assertTrue(session.candidates.contains("kyouha"), "最初に入力した文字そのまま選べること")
+        // ひらがな "きょうは" も必ず含まれていること！
+        assertTrue(session.candidates.contains("きょうは"), "ひらがなそのまま選べること")
+    }
+
+    /**
+     * Shift+Enter で最初に入力したアルファベットがそのままチャットに即座に確定挿入されることの検証
+     */
+    @Test
+    fun testShiftEnterCommitsRawInput() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        for (c in "kyouha") session.onCharTyped(c, "", insertToChat)
+        // Shift+Enter を押す
+        session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, GLFW.GLFW_MOD_SHIFT, insertToChat)
+
+        assertEquals(1, committed.size)
+        // 漢字「今日は」ではなく、最初に入力した「kyouha」がそのまま確定挿入されること！
+        assertEquals("kyouha", committed[0])
+        assertFalse(session.isComposing)
+    }
+
+    /**
+     * F10キーで最初に入力した半角英字、F7キーで全角カタカナ、F6キーでひらがなへ変換できることの検証
+     */
+    @Test
+    fun testFunctionKeysDirectSelection() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // "tesuto" と入力
+        for (c in "tesuto") session.onCharTyped(c, "", insertToChat)
+
+        // F10キー -> 半角英字 "tesuto"
+        session.onKeyPressed(GLFW.GLFW_KEY_F10, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates)
+        assertEquals("tesuto", session.candidates[0])
+
+        // F7キー -> 全角カタカナ "テスト"
+        session.onKeyPressed(GLFW.GLFW_KEY_F7, 0, 0, insertToChat)
+        assertEquals("テスト", session.candidates[0])
+
+        // F6キー -> ひらがな "てすと"
+        session.onKeyPressed(GLFW.GLFW_KEY_F6, 0, 0, insertToChat)
+        assertEquals("てすと", session.candidates[0])
+    }
 }
