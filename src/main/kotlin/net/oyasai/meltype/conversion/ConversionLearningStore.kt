@@ -12,8 +12,8 @@ import java.util.concurrent.Executors
  */
 data class LearnedCandidate(
     val candidate: String,
-    var count: Int = 1,
-    var lastUsed: Long = System.currentTimeMillis()
+    val count: Int = 1,
+    val lastUsed: Long = System.currentTimeMillis()
 )
 
 /**
@@ -34,8 +34,7 @@ class ConversionLearningStore(
         }
     }
 
-    @Volatile
-    private var dirty = false
+    private val dirty = java.util.concurrent.atomic.AtomicBoolean(false)
 
     init {
         load()
@@ -110,11 +109,13 @@ class ConversionLearningStore(
         if (trimmedReading.isEmpty() || trimmedCandidate.isEmpty()) return
 
         val candidateMap = memoryStore.computeIfAbsent(trimmedReading) { ConcurrentHashMap() }
-        val stats = candidateMap.computeIfAbsent(trimmedCandidate) {
-            LearnedCandidate(trimmedCandidate, 0, 0)
+        candidateMap.compute(trimmedCandidate) { _, existing ->
+            if (existing == null) {
+                LearnedCandidate(trimmedCandidate, 1, System.currentTimeMillis())
+            } else {
+                LearnedCandidate(trimmedCandidate, existing.count + 1, System.currentTimeMillis())
+            }
         }
-        stats.count += 1
-        stats.lastUsed = System.currentTimeMillis()
 
         saveAsync()
     }
@@ -147,30 +148,39 @@ class ConversionLearningStore(
         }
     }
 
+    private val saveLock = Any()
+
     /**
      * ファイルへの同期保存
      */
     fun save() {
         val file = storageFile ?: return
-        try {
-            file.parentFile?.mkdirs()
-            val tempFile = File(file.parentFile, "${file.name}.tmp")
-            tempFile.bufferedWriter(StandardCharsets.UTF_8).use { writer ->
-                writer.write("# Meltype MC Conversion Learning Dictionary\n")
-                writer.write("# reading\tcandidate\tcount\tlastUsed\n")
-                for ((reading, candidateMap) in memoryStore) {
-                    for ((candidate, stats) in candidateMap) {
-                        writer.write("$reading\t$candidate\t${stats.count}\t${stats.lastUsed}\n")
+        synchronized(saveLock) {
+            try {
+                file.parentFile?.mkdirs()
+                val tempFile = File(file.parentFile, "${file.name}.${System.nanoTime()}.tmp")
+                tempFile.bufferedWriter(StandardCharsets.UTF_8).use { writer ->
+                    writer.write("# Meltype MC Conversion Learning Dictionary\n")
+                    writer.write("# reading\tcandidate\tcount\tlastUsed\n")
+                    for ((reading, candidateMap) in memoryStore) {
+                        for ((candidate, stats) in candidateMap) {
+                            writer.write("$reading\t$candidate\t${stats.count}\t${stats.lastUsed}\n")
+                        }
                     }
                 }
-            }
 
-            try {
-                Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                try {
+                    Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                } catch (_: Throwable) {
+                    try {
+                        Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    } catch (_: Throwable) {
+                        if (file.exists()) file.delete()
+                        tempFile.renameTo(file)
+                    }
+                }
             } catch (_: Throwable) {
-                tempFile.renameTo(file)
             }
-        } catch (_: Throwable) {
         }
     }
 
@@ -178,10 +188,9 @@ class ConversionLearningStore(
      * 非同期で学習データをディスクに保存（ゲームの描画やメインスレッドをブロックしない）
      */
     fun saveAsync() {
-        dirty = true
+        dirty.set(true)
         ioExecutor.submit {
-            if (dirty) {
-                dirty = false
+            if (dirty.compareAndSet(true, false)) {
                 save()
             }
         }

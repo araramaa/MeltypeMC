@@ -44,6 +44,7 @@ class MeltypeSession(
         private set
 
     /** 現在選択中の候補インデックス (0-based) */
+    @Volatile
     var selectedCandidateIndex: Int = 0
         private set
 
@@ -100,9 +101,8 @@ class MeltypeSession(
     }
 
     companion object {
-        /** JIS 半角/全角キースキャンコード (10進: 41, 16進: 0x29) */
-        const val SCAN_HANKAKU_ZENKAKU_DEC = 41
-        const val SCAN_HANKAKU_ZENKAKU_HEX = 0x29
+        /** JIS 半角/全角キースキャンコード (41 / 0x29) */
+        const val SCAN_HANKAKU_ZENKAKU = 41
 
         /** JIS 変換キースキャンコード (121) */
         const val SCAN_HENKAN = 121
@@ -112,10 +112,10 @@ class MeltypeSession(
     }
 
     /**
-     * 半角/全角キー判定 (JIS スキャンコード 41 / 0x29 / GLFW_KEY_GRAVE_ACCENT / WORLDキー / F12)
+     * 半角/全角キー判定 (JIS スキャンコード 41 / GLFW_KEY_GRAVE_ACCENT / WORLDキー / F12)
      */
     fun isHankakuZenkakuKey(keyCode: Int, scanCode: Int): Boolean {
-        if (scanCode == SCAN_HANKAKU_ZENKAKU_DEC || scanCode == SCAN_HANKAKU_ZENKAKU_HEX) return true
+        if (scanCode == SCAN_HANKAKU_ZENKAKU) return true
         if (keyCode == GLFW.GLFW_KEY_GRAVE_ACCENT) return true
         if (keyCode == GLFW.GLFW_KEY_WORLD_1 || keyCode == GLFW.GLFW_KEY_WORLD_2) return true
         if (keyCode == GLFW.GLFW_KEY_F12) return true
@@ -788,6 +788,8 @@ class MeltypeSession(
                     selectedCandidateIndex = 0
                 }
             }
+        }.exceptionally {
+            null
         }
     }
 

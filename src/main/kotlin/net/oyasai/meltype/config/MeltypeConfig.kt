@@ -81,6 +81,9 @@ object MeltypeConfig {
             props.getProperty("showModeIndicator")?.toBooleanStrictOrNull()?.let { showModeIndicator = it }
             props.getProperty("autoCommandModeOnSlash")?.toBooleanStrictOrNull()?.let { autoCommandModeOnSlash = it }
             props.getProperty("learningEnabled")?.toBooleanStrictOrNull()?.let { learningEnabled = it }
+            props.getProperty("japaneseThreshold")?.toIntOrNull()?.let { japaneseThreshold = it }
+            props.getProperty("useGoogleCgi")?.toBooleanStrictOrNull()?.let { useGoogleCgi = it }
+            props.getProperty("typoCorrectionEnabled")?.toBooleanStrictOrNull()?.let { typoCorrectionEnabled = it }
         } catch (_: Throwable) {
         }
     }
@@ -100,6 +103,9 @@ object MeltypeConfig {
             props.setProperty("showModeIndicator", showModeIndicator.toString())
             props.setProperty("autoCommandModeOnSlash", autoCommandModeOnSlash.toString())
             props.setProperty("learningEnabled", learningEnabled.toString())
+            props.setProperty("japaneseThreshold", japaneseThreshold.toString())
+            props.setProperty("useGoogleCgi", useGoogleCgi.toString())
+            props.setProperty("typoCorrectionEnabled", typoCorrectionEnabled.toString())
 
             file.writer(StandardCharsets.UTF_8).use {
                 props.store(it, "Meltype MC Configuration")

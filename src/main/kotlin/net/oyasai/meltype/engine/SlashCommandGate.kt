@@ -54,9 +54,13 @@ class SlashCommandGate {
      */
     private fun shouldAllowJapaneseInCommandArgs(text: String): Boolean {
         val parts = text.split(" ")
-        if (parts.size < 3) return false
+        if (parts.size < 2) return false
         val cmd = parts[0].lowercase()
-        return cmd in listOf("/tell", "/msg", "/w", "/whisper", "/me", "/say")
+        return when (cmd) {
+            "/me", "/say" -> parts.size >= 2
+            "/tell", "/msg", "/w", "/whisper" -> parts.size >= 3
+            else -> false
+        }
     }
 
     /** チャット画面終了時や送信時に状態をリセット */

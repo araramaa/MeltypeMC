@@ -84,7 +84,8 @@ class ScoreEngine(
             return DetectionResult(Verdict.UNDECIDED, 0, 0, "入力なし")
         }
 
-        val normalized = RomajiDetector.readCRow(letters.lowercase())
+        val lower = letters.lowercase()
+        val normalized = RomajiDetector.readCRow(lower)
         val isAmbiguousJapanese = normalized in AmbiguousJapaneseWords
         var japaneseScore = 0
         var englishScore = 0
@@ -115,8 +116,8 @@ class ScoreEngine(
                 } else if (normalized.length <= 2) {
                     // 1〜2文字の有効なローマ字音節（ha, he, to, no, me 等）は日本語（助詞・基本音節）として加点
                     japaneseScore += 3
-                } else if (!englishDetector.isWord(letters)) {
-                    if (normalized.length >= 5 && !englishDetector.isPrefix(letters)) {
+                } else if (!englishDetector.isWord(lower)) {
+                    if (normalized.length >= 5 && !englishDetector.isPrefix(lower)) {
                         japaneseScore += 4
                     } else if (normalized.length >= 3) {
                         // 3〜4文字の一般的な短語（ima, kore, sora, inu, neko 等）に対する加点
@@ -130,21 +131,21 @@ class ScoreEngine(
         if (isFinal) {
             // 単語確定時（Space/Enter）:
             // 曖昧単語を除き、3文字以上の英単語のみ英語スコアを与える
-            if (!isAmbiguousJapanese && letters.length >= 3 && englishDetector.isWord(letters)) {
+            if (!isAmbiguousJapanese && lower.length >= 3 && englishDetector.isWord(lower)) {
                 englishScore += 5
             }
         } else {
             // 入力中: 曖昧単語や2文字以下でローマ字として有効な場合は英語評価を抑制
-            if (!isAmbiguousJapanese && letters.length >= 3) {
-                englishScore += englishDetector.evaluate(letters)
+            if (!isAmbiguousJapanese && lower.length >= 3) {
+                englishScore += englishDetector.evaluate(lower)
             } else if (!analysis.isValid) {
-                englishScore += englishDetector.evaluate(letters)
+                englishScore += englishDetector.evaluate(lower)
             }
         }
 
         // ★最重要: 3文字以上で英単語辞書に完全一致する場合、ローマ字偶然一致（例: diamond -> ぢあもんd）を排して英語を確定！
         // ※ただし日本語日常語（sore, are, dare, sake等）は日本語を優先
-        if (!isAmbiguousJapanese && letters.length >= 3 && englishDetector.isWord(letters)) {
+        if (!isAmbiguousJapanese && lower.length >= 3 && englishDetector.isWord(lower)) {
             // 日本語としての強い特徴（拗音・促音等）がなければ英語
             if (analysis.strongYouon == 0 && analysis.tsu == 0 && analysis.sokuon == 0) {
                 return DetectionResult(Verdict.ENGLISH, japaneseScore, englishScore + 10, "英単語辞書完全一致")

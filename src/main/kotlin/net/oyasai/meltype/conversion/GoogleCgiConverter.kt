@@ -23,7 +23,14 @@ class GoogleCgiConverter(
         .connectTimeout(Duration.ofMillis(1000))
         .build()
 
-    private val cache = ConcurrentHashMap<String, List<String>>()
+    private val maxCacheSize = 1000
+    private val cache: MutableMap<String, List<String>> = java.util.Collections.synchronizedMap(
+        object : java.util.LinkedHashMap<String, List<String>>(100, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<String>>?): Boolean {
+                return size > maxCacheSize
+            }
+        }
+    )
 
     override fun convertAsync(reading: String): CompletableFuture<List<String>> {
         val trimmed = reading.trim()
@@ -48,22 +55,22 @@ class GoogleCgiConverter(
                 .build()
 
             httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
-                .thenApply { response ->
+                .thenCompose { response ->
                     if (response.statusCode() == 200) {
                         val parsed = parseGoogleCgiResponse(response.body(), trimmed)
                         if (parsed.isNotEmpty()) {
                             cache[trimmed] = parsed
-                            parsed
+                            CompletableFuture.completedFuture(parsed)
                         } else {
-                            fallback.convertAsync(trimmed).join()
+                            fallback.convertAsync(trimmed)
                         }
                     } else {
-                        fallback.convertAsync(trimmed).join()
+                        fallback.convertAsync(trimmed)
                     }
                 }
-                .exceptionally {
+                .exceptionallyCompose {
                     // 通信エラー時はローカル辞書へフォールバック
-                    fallback.convertAsync(trimmed).join()
+                    fallback.convertAsync(trimmed)
                 }
         } catch (_: Throwable) {
             fallback.convertAsync(trimmed)

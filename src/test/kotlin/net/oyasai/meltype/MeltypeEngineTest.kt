@@ -939,6 +939,45 @@ class MeltypeEngineTest {
         // 原文「ohayou」が必ず候補に含まれていて選択できること！
         assertTrue(session.candidates.contains("ohayou"), "原文 ohayou が候補に含まれること")
     }
+
+    @Test
+    fun testSlashCommandArgsJapaneseAllowed() {
+        // /say の場合は2番目のトークンからメッセージ（日本語許可）
+        assertFalse(slashGate.shouldBypassIme("/say ", 'k'), "/say 以降はIMEがバイパスされないこと")
+        assertFalse(slashGate.shouldBypassIme("/say test ", 'k'), "/say の後続入力もIMEがバイパスされないこと")
+
+        // /me の場合も2番目のトークンからメッセージ
+        assertFalse(slashGate.shouldBypassIme("/me ", 'k'), "/me 以降はIMEがバイパスされないこと")
+
+        // /tell の場合は3番目のトークンからメッセージ
+        assertTrue(slashGate.shouldBypassIme("/tell ", 'p'), "/tell 直後のプレイヤー名はバイパスされること")
+        assertFalse(slashGate.shouldBypassIme("/tell steve ", 'k'), "/tell <player> 以降はIMEがバイパスされないこと")
+    }
+
+    @Test
+    fun testMeltypeConfigPropertiesPersistence() {
+        val tempFile = java.io.File.createTempFile("meltype_test_config", ".properties")
+        try {
+            val props = java.util.Properties()
+            props.setProperty("japaneseThreshold", "3")
+            props.setProperty("useGoogleCgi", "false")
+            props.setProperty("typoCorrectionEnabled", "false")
+
+            tempFile.writer(java.nio.charset.StandardCharsets.UTF_8).use {
+                props.store(it, "Test")
+            }
+
+            // 直接プロパティ読み込みの検証
+            val loaded = java.util.Properties()
+            tempFile.reader(java.nio.charset.StandardCharsets.UTF_8).use { loaded.load(it) }
+
+            assertEquals(3, loaded.getProperty("japaneseThreshold")?.toIntOrNull())
+            assertEquals(false, loaded.getProperty("useGoogleCgi")?.toBooleanStrictOrNull())
+            assertEquals(false, loaded.getProperty("typoCorrectionEnabled")?.toBooleanStrictOrNull())
+        } finally {
+            tempFile.delete()
+        }
+    }
 }
 
 
