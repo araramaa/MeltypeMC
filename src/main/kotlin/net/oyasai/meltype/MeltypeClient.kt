@@ -39,6 +39,8 @@ object MeltypeClient : ClientModInitializer {
     lateinit var session: MeltypeSession
         private set
 
+    private val attachedScreens: MutableSet<Screen> = java.util.Collections.newSetFromMap(java.util.WeakHashMap())
+
     override fun onInitializeClient() {
         logger.info("[MeltypeMC] Initializing Meltype Japanese Input (Fabric Screen API mode)...")
 
@@ -69,6 +71,7 @@ object MeltypeClient : ClientModInitializer {
 
     private fun registerScreenHandlers(screen: Screen) {
         if (!isTextInputActive(screen)) return
+        if (!attachedScreens.add(screen)) return // 同一画面インスタンスへの多重登録を防止
 
         logger.info("[MeltypeMC] Attaching input handlers to screen: ${screen.javaClass.simpleName}")
         session.resetForNewScreen()
@@ -140,8 +143,9 @@ object MeltypeClient : ClientModInitializer {
         })
 
         // 画面を閉じた時のセッションリセット
-        ScreenEvents.remove(screen).register(ScreenEvents.Remove { _ ->
+        ScreenEvents.remove(screen).register(ScreenEvents.Remove { s ->
             try {
+                attachedScreens.remove(s)
                 session.resetForNewScreen()
                 slashCommandGate.reset()
             } catch (_: Throwable) {

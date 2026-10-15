@@ -207,7 +207,16 @@ class MeltypeSession(
                 return true
             }
 
-            // 6. 英字以外の記号や数字が入力された場合
+            // 6. 外部IME（Windows IME等）から直接ひらがな・カタカナ・漢字等の確定文字が送られてきた場合
+            // ★二重入力防止ガード: Meltype 側の未確定バッファを破棄し、外部IMEの文字のみをバニラにパススルー
+            if (isJapaneseChar(c)) {
+                if (isComposing) {
+                    reset()
+                }
+                return false // Minecraftバニラ側の直接入力に任せる
+            }
+
+            // 7. 英字以外の記号や数字が入力された場合
             if (isComposing) {
                 commitCurrent(insertToChat)
                 insertToChat(c.toString())
@@ -216,6 +225,15 @@ class MeltypeSession(
 
             return false
         }
+    }
+
+    /** 外部IME確定文字判定（ひらがな、カタカナ、漢字） */
+    private fun isJapaneseChar(c: Char): Boolean {
+        val code = c.code
+        return (code in 0x3040..0x309F) || // ひらがな
+               (code in 0x30A0..0x30FF) || // カタカナ
+               (code in 0x4E00..0x9FFF) || // CJK統合漢字
+               (code in 0x3400..0x4DBF)    // CJK拡張A
     }
 
     /**

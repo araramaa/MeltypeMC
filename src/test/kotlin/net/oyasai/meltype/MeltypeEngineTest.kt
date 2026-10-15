@@ -978,6 +978,40 @@ class MeltypeEngineTest {
             tempFile.delete()
         }
     }
+
+    /**
+     * Windows等の外部IMEが有効な状態でひらがな・漢字の確定文字が直接送られてきた場合、
+     * Meltype側のバッファが自動破棄されて二重入力（重複挿入）が防止されることのテスト
+     */
+    @Test
+    fun testExternalImeDirectJapaneseInputCancelsBufferToPreventDuplicateInput() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // 1. "konn" までローマ字が入力された状態
+        for (c in "konn") session.onCharTyped(c, "", insertToChat)
+        assertTrue(session.isComposing)
+        assertEquals("こん", session.previewKana)
+
+        // 2. ここでWindows IMEが確定した日本語文字「今」が直接 charTyped として飛んできた
+        val handled = session.onCharTyped('今', "", insertToChat)
+
+        // Meltype側は二重確定を避けるため insertToChat に確定文字を流し込まず、Minecraftバニラに処理を任せる (handled = false)
+        assertFalse(handled, "外部IMEの文字はバニラにパススルーされること")
+        // Meltype側の未確定バッファはクリアされていること
+        assertFalse(session.isComposing, "Meltypeの未確定バッファは破棄されること")
+        assertEquals("", session.previewKana)
+        // 二重挿入されていないこと
+        assertTrue(committed.isEmpty(), "Meltype側から二重にテキストが挿入されていないこと")
+    }
 }
 
 
