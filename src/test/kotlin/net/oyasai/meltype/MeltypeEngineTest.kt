@@ -1012,6 +1012,73 @@ class MeltypeEngineTest {
         // 二重挿入されていないこと
         assertTrue(committed.isEmpty(), "Meltype側から二重にテキストが挿入されていないこと")
     }
+
+    /**
+     * ユーザー指定機能:
+     * 「最初に打った文字をシフトで一文字ずつ選んで変換できるようにする」
+     * Shift + Left で文節を 1 文字ずつ縮め、Shift + Right で伸ばし、
+     * 選択した文節のみを部分確定して、残りの文字列を引き継げることの検証
+     */
+    @Test
+    fun testShiftArrowClauseResizingAndPartialConversion() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate
+        )
+        session.setInputMode(InputMode.HYBRID, insertToChat)
+
+        // "kyouhadiamond" と入力
+        for (c in "kyouhadiamond") session.onCharTyped(c, "", insertToChat)
+        assertTrue(session.isComposing)
+
+        // 1. Shift + Left を押して文節を縮める
+        // "kyouhadiamond" (13文字) -> Shift+Left で 12文字へ
+        session.onKeyPressed(GLFW.GLFW_KEY_LEFT, 0, GLFW.GLFW_MOD_SHIFT, insertToChat)
+        assertEquals(12, session.clauseLength)
+        assertTrue(session.hasCandidates)
+        assertTrue(session.previewKana.startsWith("["))
+
+        // 2. さらに Shift + Left を複数回押して "kyouha" (6文字) まで縮める
+        while (session.clauseLength > 6) {
+            session.onKeyPressed(GLFW.GLFW_KEY_LEFT, 0, GLFW.GLFW_MOD_SHIFT, insertToChat)
+        }
+        assertEquals(6, session.clauseLength)
+
+        // "kyouha"（きょうは）の候補が表示され、残りの "diamond" がプレビューに含まれていること
+        assertTrue(session.candidates.contains("きょうは"))
+        assertTrue(session.previewKana.contains("diamond"))
+
+        // 3. Shift + Right を 1 回押すと 7文字 ("kyouhad") に伸びること
+        session.onKeyPressed(GLFW.GLFW_KEY_RIGHT, 0, GLFW.GLFW_MOD_SHIFT, insertToChat)
+        assertEquals(7, session.clauseLength)
+
+        // 再度 Shift + Left で 6文字 ("kyouha") に戻す
+        session.onKeyPressed(GLFW.GLFW_KEY_LEFT, 0, GLFW.GLFW_MOD_SHIFT, insertToChat)
+        assertEquals(6, session.clauseLength)
+
+        // 4. Enter キーで「きょうは」を部分確定！
+        session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, insertToChat)
+
+        // チャット欄に「きょうは」（または変換された漢字）が挿入されていること
+        assertEquals(1, committed.size)
+        val firstCommit = committed[0]
+        assertTrue(firstCommit.isNotEmpty())
+
+        // 5. 残りの "diamond" がバッファに引き継がれ、未確定状態として継続していること！
+        assertTrue(session.isComposing)
+        assertEquals("diamond", session.rawBuffer.toString())
+
+        // 6. 続けて Enter を押すと残りの "diamond" も確定されること
+        session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, insertToChat)
+        assertEquals(2, committed.size)
+        assertEquals("diamond", committed[1])
+        assertFalse(session.isComposing)
+    }
 }
 
 

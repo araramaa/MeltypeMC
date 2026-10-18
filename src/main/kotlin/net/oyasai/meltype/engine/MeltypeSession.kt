@@ -34,6 +34,10 @@ class MeltypeSession(
     var rawBuffer: StringBuilder = StringBuilder()
         private set
 
+    /** 現在の文節伸縮における選択文字数（アルファベット数）。0 または rawBuffer.length の場合は全文字対象 */
+    var clauseLength: Int = 0
+        private set
+
     /** 現在のプレビューテキスト（下線表示用: 日本語ならひらがな、英語なら英単語そのまま） */
     var previewKana: String = ""
         private set
@@ -181,6 +185,7 @@ class MeltypeSession(
                     commitCurrent(insertToChat)
                 }
 
+                clauseLength = 0
                 rawBuffer.append(c)
                 updatePreview()
                 return true
@@ -363,12 +368,15 @@ class MeltypeSession(
 
                 // Backspace: 1文字削除
                 GLFW.GLFW_KEY_BACKSPACE -> {
-                    if (hasCandidates) {
+                    if (hasCandidates || clauseLength > 0) {
                         candidates = emptyList()
                         selectedCandidateIndex = 0
+                        clauseLength = 0
+                        updatePreview()
                         return true
                     }
                     if (rawBuffer.isNotEmpty()) {
+                        clauseLength = 0
                         rawBuffer.deleteCharAt(rawBuffer.length - 1)
                         updatePreview()
                         return true
@@ -397,25 +405,52 @@ class MeltypeSession(
                             } else {
                                 (selectedCandidateIndex + 1) % count
                             }
+                            updatePreviewForCurrentCandidate()
                         }
                         return true
                     }
                 }
 
-                // 左右下矢印キー: 候補選択（未表示時は下矢印で候補表示）
-                GLFW.GLFW_KEY_RIGHT, GLFW.GLFW_KEY_DOWN -> {
-                    if (!hasCandidates && isComposing && keyCode == GLFW.GLFW_KEY_DOWN) {
+                // 左右矢印キー: Shift+左右で文節伸縮（1文字ずつ選択・変換）、通常は候補選択
+                GLFW.GLFW_KEY_RIGHT -> {
+                    val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
+                    if (shift && isComposing) {
+                        expandClause()
+                        return true
+                    }
+                    if (hasCandidates && candidates.isNotEmpty()) {
+                        selectedCandidateIndex = (selectedCandidateIndex + 1) % candidates.size
+                        updatePreviewForCurrentCandidate()
+                        return true
+                    }
+                }
+                GLFW.GLFW_KEY_LEFT -> {
+                    val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
+                    if (shift && isComposing) {
+                        shrinkClause()
+                        return true
+                    }
+                    if (hasCandidates && candidates.isNotEmpty()) {
+                        selectedCandidateIndex = if (selectedCandidateIndex - 1 < 0) candidates.size - 1 else selectedCandidateIndex - 1
+                        updatePreviewForCurrentCandidate()
+                        return true
+                    }
+                }
+                GLFW.GLFW_KEY_DOWN -> {
+                    if (!hasCandidates && isComposing) {
                         triggerConversion()
                         return true
                     }
                     if (hasCandidates && candidates.isNotEmpty()) {
                         selectedCandidateIndex = (selectedCandidateIndex + 1) % candidates.size
+                        updatePreviewForCurrentCandidate()
                         return true
                     }
                 }
-                GLFW.GLFW_KEY_LEFT, GLFW.GLFW_KEY_UP -> {
+                GLFW.GLFW_KEY_UP -> {
                     if (hasCandidates && candidates.isNotEmpty()) {
                         selectedCandidateIndex = if (selectedCandidateIndex - 1 < 0) candidates.size - 1 else selectedCandidateIndex - 1
+                        updatePreviewForCurrentCandidate()
                         return true
                     }
                 }
@@ -556,6 +591,104 @@ class MeltypeSession(
             previewKana = romajiDetector.toKanaLenient(text)
         } catch (_: Throwable) {
             previewKana = text
+        }
+    }
+
+    /**
+     * 文節（変換対象範囲）を 1 文字縮める（Shift + Left）
+     * 最初に入力した文字を 1 文字ずつ選んで部分変換
+     */
+    fun shrinkClause() {
+        if (rawBuffer.length <= 1) return
+        if (clauseLength <= 0 || clauseLength > rawBuffer.length) {
+            clauseLength = rawBuffer.length - 1
+        } else if (clauseLength > 1) {
+            clauseLength--
+        }
+        updateClauseConversion()
+    }
+
+    /**
+     * 文節（変換対象範囲）を 1 文字伸ばす（Shift + Right）
+     */
+    fun expandClause() {
+        if (rawBuffer.isEmpty()) return
+        if (clauseLength in 1 until rawBuffer.length) {
+            clauseLength++
+            if (clauseLength == rawBuffer.length) {
+                // 全文字対象に戻った場合は通常変換に復帰
+                clauseLength = 0
+                triggerConversion()
+                return
+            }
+            updateClauseConversion()
+        }
+    }
+
+    /**
+     * 文節伸縮時のかな漢字変換およびプレビュー更新
+     */
+    private fun updateClauseConversion() {
+        if (clauseLength !in 1 until rawBuffer.length) {
+            clauseLength = 0
+            triggerConversion()
+            return
+        }
+
+        val activeRawPart = rawBuffer.substring(0, clauseLength)
+        val remainderRawPart = rawBuffer.substring(clauseLength)
+        val activeKana = romajiDetector.toKanaLenient(activeRawPart)
+        val remainderKana = if (scoreEngine.isEnglishInput(remainderRawPart)) remainderRawPart else romajiDetector.toKanaLenient(remainderRawPart)
+
+        activeReading = activeKana
+        activeRaw = activeRawPart
+
+        val katakana = romajiDetector.toKatakana(activeKana)
+        val list = mutableListOf<String>()
+        val learned = learningStore.getLearnedCandidates(activeKana)
+        list.addAll(learned)
+        if (!list.contains(activeKana)) list.add(activeKana)
+        if (katakana.isNotEmpty() && katakana != activeKana && !list.contains(katakana)) list.add(katakana)
+        if (!list.contains(activeRawPart)) list.add(activeRawPart)
+
+        candidates = list.distinct().toMutableList()
+        selectedCandidateIndex = 0
+
+        val currentSelected = candidates.firstOrNull() ?: activeKana
+        previewKana = "[$currentSelected]$remainderKana"
+
+        converter.convertAsync(activeKana).thenAccept { resultList ->
+            synchronized(lock) {
+                if (rawBuffer.length >= clauseLength && clauseLength > 0) {
+                    val ranked = learningStore.rankCandidates(activeKana, resultList)
+                    val fullList = mutableListOf<String>()
+                    fullList.addAll(ranked)
+                    if (!fullList.contains(activeKana)) fullList.add(activeKana)
+                    if (katakana.isNotEmpty() && katakana != activeKana && !fullList.contains(katakana)) fullList.add(katakana)
+                    if (!fullList.contains(activeRawPart)) fullList.add(activeRawPart)
+
+                    candidates = finalizeCandidates(fullList, activeRawPart, activeKana)
+                    if (selectedCandidateIndex !in candidates.indices) {
+                        selectedCandidateIndex = 0
+                    }
+                    val selected = candidates.getOrNull(selectedCandidateIndex) ?: activeKana
+                    previewKana = "[$selected]$remainderKana"
+                }
+            }
+        }.exceptionally { null }
+    }
+
+    /**
+     * 候補インデックス変更時に文節プレビューの表示を更新
+     */
+    private fun updatePreviewForCurrentCandidate() {
+        if (clauseLength in 1 until rawBuffer.length) {
+            val activeRawPart = rawBuffer.substring(0, clauseLength)
+            val remainderRawPart = rawBuffer.substring(clauseLength)
+            val activeKana = romajiDetector.toKanaLenient(activeRawPart)
+            val remainderKana = if (scoreEngine.isEnglishInput(remainderRawPart)) remainderRawPart else romajiDetector.toKanaLenient(remainderRawPart)
+            val selected = candidates.getOrNull(selectedCandidateIndex) ?: activeKana
+            previewKana = "[$selected]$remainderKana"
         }
     }
 
@@ -818,6 +951,10 @@ class MeltypeSession(
             val currentReading = activeReading
             val currentRaw = activeRaw
 
+            // 文節伸縮による部分確定かどうか
+            val isPartialClause = clauseLength in 1 until rawBuffer.length
+            val remainderRaw = if (isPartialClause) rawBuffer.substring(clauseLength) else ""
+
             val committedText = when {
                 hasCandidates -> candidates.getOrNull(selectedCandidateIndex) ?: candidates.firstOrNull() ?: previewKana
                 previewKana.isNotEmpty() -> {
@@ -862,7 +999,18 @@ class MeltypeSession(
                 } catch (_: Throwable) {
                 }
             }
-            reset()
+
+            if (isPartialClause && remainderRaw.isNotEmpty()) {
+                // 文節伸縮で確定された残りの文字列を次のバッファとして引き継ぐ
+                rawBuffer.clear()
+                rawBuffer.append(remainderRaw)
+                clauseLength = 0
+                candidates = emptyList()
+                selectedCandidateIndex = 0
+                updatePreview()
+            } else {
+                reset()
+            }
         }
     }
 
@@ -883,6 +1031,7 @@ class MeltypeSession(
     fun reset() {
         synchronized(lock) {
             rawBuffer.clear()
+            clauseLength = 0
             previewKana = ""
             candidates = emptyList()
             selectedCandidateIndex = 0
