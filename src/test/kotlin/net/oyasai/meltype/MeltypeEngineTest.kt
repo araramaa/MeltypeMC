@@ -1079,6 +1079,76 @@ class MeltypeEngineTest {
         assertEquals("diamond", committed[1])
         assertFalse(session.isComposing)
     }
+
+    @Test
+    fun testClauseManagerUnit() {
+        val manager = ClauseManager()
+        assertFalse(manager.isPartial(10))
+        assertEquals(0, manager.clauseLength)
+
+        // shrink
+        manager.shrink(10)
+        assertEquals(9, manager.clauseLength)
+        assertTrue(manager.isPartial(10))
+
+        manager.shrink(10)
+        assertEquals(8, manager.clauseLength)
+
+        // split
+        val (active, remainder) = manager.split("0123456789")
+        assertEquals("01234567", active)
+        assertEquals("89", remainder)
+
+        // expand
+        val fullyExpanded = manager.expand(10)
+        assertFalse(fullyExpanded)
+        assertEquals(9, manager.clauseLength)
+
+        val restored = manager.expand(10)
+        assertTrue(restored)
+        assertEquals(0, manager.clauseLength)
+        assertFalse(manager.isPartial(10))
+
+        // reset
+        manager.shrink(5)
+        assertEquals(4, manager.clauseLength)
+        manager.reset()
+        assertEquals(0, manager.clauseLength)
+    }
+
+    @Test
+    fun testPreviewFormatterUnit() {
+        val compoundSplitter = CompoundWordSplitter(englishDetector, romajiDetector)
+        val formatter = PreviewFormatter(romajiDetector, scoreEngine, compoundSplitter)
+
+        // 空文字列
+        assertEquals("", formatter.formatPreview(""))
+
+        // 英語
+        assertEquals("diamond", formatter.formatPreview("diamond"))
+
+        // 日本語
+        assertEquals("きょうは", formatter.formatPreview("kyouha"))
+
+        // 複合語
+        val preview = formatter.formatPreview("diamondwosagasou")
+        assertTrue(preview.contains("diamond") && preview.contains("さがそう"))
+
+        // 文節伸縮プレビュー
+        val clausePreview = formatter.formatClausePreview("今日", "hadiamond")
+        assertTrue(clausePreview.startsWith("[今日]"))
+        assertTrue(clausePreview.contains("diamond"))
+    }
+
+    @Test
+    fun testCandidateFinalizerUnit() {
+        val input = listOf("候補1", "候補2", "候補3")
+        val finalized = CandidateFinalizer.finalize(input, "rawInput", "kanaInput", maxCandidatesConfig = 5)
+
+        assertTrue(finalized.contains("rawInput"))
+        assertTrue(finalized.contains("kanaInput"))
+        assertTrue(finalized.size <= 5)
+    }
 }
 
 

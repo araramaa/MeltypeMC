@@ -30,13 +30,18 @@ class MeltypeSession(
     var currentInputMode: InputMode = MeltypeConfig.initialInputMode
         private set
 
+    /** 文節伸縮マネージャー */
+    private val clauseManager = ClauseManager()
+
+    /** プレビュー文字列生成フォーマッター */
+    private val previewFormatter = PreviewFormatter(romajiDetector, scoreEngine, compoundWordSplitter)
+
     /** 現在入力中の生キーストローク（アルファベット列） */
     var rawBuffer: StringBuilder = StringBuilder()
         private set
 
     /** 現在の文節伸縮における選択文字数（アルファベット数）。0 または rawBuffer.length の場合は全文字対象 */
-    var clauseLength: Int = 0
-        private set
+    val clauseLength: Int get() = clauseManager.clauseLength
 
     /** 現在のプレビューテキスト（下線表示用: 日本語ならひらがな、英語なら英単語そのまま） */
     var previewKana: String = ""
@@ -185,7 +190,7 @@ class MeltypeSession(
                     commitCurrent(insertToChat)
                 }
 
-                clauseLength = 0
+                clauseManager.reset()
                 rawBuffer.append(c)
                 updatePreview()
                 return true
@@ -368,15 +373,15 @@ class MeltypeSession(
 
                 // Backspace: 1文字削除
                 GLFW.GLFW_KEY_BACKSPACE -> {
-                    if (hasCandidates || clauseLength > 0) {
+                    if (hasCandidates || clauseManager.clauseLength > 0) {
                         candidates = emptyList()
                         selectedCandidateIndex = 0
-                        clauseLength = 0
+                        clauseManager.reset()
                         updatePreview()
                         return true
                     }
                     if (rawBuffer.isNotEmpty()) {
-                        clauseLength = 0
+                        clauseManager.reset()
                         rawBuffer.deleteCharAt(rawBuffer.length - 1)
                         updatePreview()
                         return true
@@ -543,7 +548,6 @@ class MeltypeSession(
 
     /**
      * 入力プレビューの更新
-     * 英単語一致・英語優勢時は英字のままプレビュー（ぢあもんdに化けるのを防止）
      */
     private fun updatePreview() {
         val text = rawBuffer.toString()
@@ -552,46 +556,7 @@ class MeltypeSession(
             candidates = emptyList()
             return
         }
-
-        // スペース区切りの場合
-        if (text.contains(' ')) {
-            previewKana = text.split(' ').joinToString(" ") { token ->
-                if (token.isEmpty()) ""
-                else if (scoreEngine.isPureEnglishWord(token)) token
-                else {
-                    val compound = compoundWordSplitter.split(token)
-                    if (compound != null) "${compound.english} ${compound.japaneseKana}"
-                    else romajiDetector.toKanaLenient(token)
-                }
-            }
-            return
-        }
-
-        // 複合語・ハイブリッド文判定（例: "kyouhadiamondwotoriniikou" -> "きょうはdiamondをとりにいこう"）
-        val multiCompound = compoundWordSplitter.splitSentence(text)
-        if (multiCompound != null) {
-            previewKana = multiCompound.previewText
-            return
-        }
-
-        // 英単語＋日本語の複合語判定（例: "diamondwosagasou" -> "diamond をさがそう"）
-        val compound = compoundWordSplitter.split(text)
-        if (compound != null) {
-            previewKana = "${compound.english} ${compound.japaneseKana}"
-            return
-        }
-
-        // 英語（英単語辞書一致、ローマ字として無効な英字列、大文字を含む英字列等）は英語のままプレビュー！
-        if (scoreEngine.isEnglishInput(text)) {
-            previewKana = text
-            return
-        }
-
-        try {
-            previewKana = romajiDetector.toKanaLenient(text)
-        } catch (_: Throwable) {
-            previewKana = text
-        }
+        previewKana = previewFormatter.formatPreview(text)
     }
 
     /**
@@ -600,11 +565,7 @@ class MeltypeSession(
      */
     fun shrinkClause() {
         if (rawBuffer.length <= 1) return
-        if (clauseLength <= 0 || clauseLength > rawBuffer.length) {
-            clauseLength = rawBuffer.length - 1
-        } else if (clauseLength > 1) {
-            clauseLength--
-        }
+        clauseManager.shrink(rawBuffer.length)
         updateClauseConversion()
     }
 
@@ -613,32 +574,26 @@ class MeltypeSession(
      */
     fun expandClause() {
         if (rawBuffer.isEmpty()) return
-        if (clauseLength in 1 until rawBuffer.length) {
-            clauseLength++
-            if (clauseLength == rawBuffer.length) {
-                // 全文字対象に戻った場合は通常変換に復帰
-                clauseLength = 0
-                triggerConversion()
-                return
-            }
-            updateClauseConversion()
+        if (clauseManager.expand(rawBuffer.length)) {
+            // 全文字対象に戻った場合は通常変換に復帰
+            triggerConversion()
+            return
         }
+        updateClauseConversion()
     }
 
     /**
      * 文節伸縮時のかな漢字変換およびプレビュー更新
      */
     private fun updateClauseConversion() {
-        if (clauseLength !in 1 until rawBuffer.length) {
-            clauseLength = 0
+        if (!clauseManager.isPartial(rawBuffer.length)) {
+            clauseManager.reset()
             triggerConversion()
             return
         }
 
-        val activeRawPart = rawBuffer.substring(0, clauseLength)
-        val remainderRawPart = rawBuffer.substring(clauseLength)
+        val (activeRawPart, remainderRawPart) = clauseManager.split(rawBuffer.toString())
         val activeKana = romajiDetector.toKanaLenient(activeRawPart)
-        val remainderKana = if (scoreEngine.isEnglishInput(remainderRawPart)) remainderRawPart else romajiDetector.toKanaLenient(remainderRawPart)
 
         activeReading = activeKana
         activeRaw = activeRawPart
@@ -655,11 +610,11 @@ class MeltypeSession(
         selectedCandidateIndex = 0
 
         val currentSelected = candidates.firstOrNull() ?: activeKana
-        previewKana = "[$currentSelected]$remainderKana"
+        previewKana = previewFormatter.formatClausePreview(currentSelected, remainderRawPart)
 
         converter.convertAsync(activeKana).thenAccept { resultList ->
             synchronized(lock) {
-                if (rawBuffer.length >= clauseLength && clauseLength > 0) {
+                if (rawBuffer.length >= clauseManager.clauseLength && clauseManager.clauseLength > 0) {
                     val ranked = learningStore.rankCandidates(activeKana, resultList)
                     val fullList = mutableListOf<String>()
                     fullList.addAll(ranked)
@@ -667,12 +622,12 @@ class MeltypeSession(
                     if (katakana.isNotEmpty() && katakana != activeKana && !fullList.contains(katakana)) fullList.add(katakana)
                     if (!fullList.contains(activeRawPart)) fullList.add(activeRawPart)
 
-                    candidates = finalizeCandidates(fullList, activeRawPart, activeKana)
+                    candidates = CandidateFinalizer.finalize(fullList, activeRawPart, activeKana)
                     if (selectedCandidateIndex !in candidates.indices) {
                         selectedCandidateIndex = 0
                     }
                     val selected = candidates.getOrNull(selectedCandidateIndex) ?: activeKana
-                    previewKana = "[$selected]$remainderKana"
+                    previewKana = previewFormatter.formatClausePreview(selected, remainderRawPart)
                 }
             }
         }.exceptionally { null }
@@ -682,13 +637,11 @@ class MeltypeSession(
      * 候補インデックス変更時に文節プレビューの表示を更新
      */
     private fun updatePreviewForCurrentCandidate() {
-        if (clauseLength in 1 until rawBuffer.length) {
-            val activeRawPart = rawBuffer.substring(0, clauseLength)
-            val remainderRawPart = rawBuffer.substring(clauseLength)
+        if (clauseManager.isPartial(rawBuffer.length)) {
+            val (activeRawPart, remainderRawPart) = clauseManager.split(rawBuffer.toString())
             val activeKana = romajiDetector.toKanaLenient(activeRawPart)
-            val remainderKana = if (scoreEngine.isEnglishInput(remainderRawPart)) remainderRawPart else romajiDetector.toKanaLenient(remainderRawPart)
             val selected = candidates.getOrNull(selectedCandidateIndex) ?: activeKana
-            previewKana = "[$selected]$remainderKana"
+            previewKana = previewFormatter.formatClausePreview(selected, remainderRawPart)
         }
     }
 
@@ -766,7 +719,7 @@ class MeltypeSession(
                         if (!fullList.contains(rawCandidate)) fullList.add(rawCandidate)
                     }
 
-                    candidates = finalizeCandidates(fullList, rawCandidate, kanaCandidate)
+                    candidates = CandidateFinalizer.finalize(fullList, rawCandidate, kanaCandidate)
                     if (selectedCandidateIndex !in candidates.indices) {
                         selectedCandidateIndex = 0
                     }
@@ -775,33 +728,6 @@ class MeltypeSession(
         }.exceptionally {
             null
         }
-    }
-
-    /**
-     * 候補リストに最初に入力した文字そのまま（raw）およびひらがな（kana）が必ず含まれることを保証し、
-     * 数字キー（1〜9）で直接選択可能な枠（最大7〜9件）に整える
-     */
-    private fun finalizeCandidates(
-        fullList: List<String>,
-        rawCandidate: String,
-        kanaCandidate: String? = null
-    ): MutableList<String> {
-        val distinct = fullList.distinct().toMutableList()
-        if (kanaCandidate != null && !distinct.contains(kanaCandidate)) {
-            distinct.add(kanaCandidate)
-        }
-        if (!distinct.contains(rawCandidate)) {
-            distinct.add(rawCandidate)
-        }
-
-        val maxCount = maxOf(MeltypeConfig.maxCandidates, 7).coerceAtMost(9)
-        // rawCandidate が maxCount 枠外にはみ出ないよう、末尾に必ず残す！
-        if (!distinct.take(maxCount).contains(rawCandidate)) {
-            distinct.remove(rawCandidate)
-            distinct.add(minOf(maxCount - 1, distinct.size), rawCandidate)
-        }
-
-        return distinct.take(maxCount).toMutableList()
     }
 
     /**
@@ -848,7 +774,7 @@ class MeltypeSession(
                     if (!fullList.contains(split.previewText)) fullList.add(split.previewText)
                     if (!fullList.contains(raw)) fullList.add(raw)
 
-                    candidates = finalizeCandidates(fullList, raw, split.previewText)
+                    candidates = CandidateFinalizer.finalize(fullList, raw, split.previewText)
                     selectedCandidateIndex = 0
                 }
             }
@@ -879,7 +805,7 @@ class MeltypeSession(
                 if (rawBuffer.isNotEmpty()) {
                     val fullList = resultList.map { "${compound.english}$it" }
                     val ranked = learningStore.rankCandidates(raw, fullList)
-                    candidates = finalizeCandidates(ranked + listOf(initialKana), raw, initialKana)
+                    candidates = CandidateFinalizer.finalize(ranked + listOf(initialKana), raw, initialKana)
                     selectedCandidateIndex = 0
                 }
             }
@@ -935,7 +861,7 @@ class MeltypeSession(
                     val synthesized1 = tokenCandidates.joinToString(" ") { it.firstOrNull() ?: "" }
                     val list = mutableListOf(synthesized1)
                     if (!list.contains(immediateSentence)) list.add(immediateSentence)
-                    candidates = finalizeCandidates(list, rawSentence, immediateSentence)
+                    candidates = CandidateFinalizer.finalize(list, rawSentence, immediateSentence)
                     selectedCandidateIndex = 0
                 }
             }
@@ -952,8 +878,8 @@ class MeltypeSession(
             val currentRaw = activeRaw
 
             // 文節伸縮による部分確定かどうか
-            val isPartialClause = clauseLength in 1 until rawBuffer.length
-            val remainderRaw = if (isPartialClause) rawBuffer.substring(clauseLength) else ""
+            val isPartialClause = clauseManager.isPartial(rawBuffer.length)
+            val remainderRaw = if (isPartialClause) clauseManager.split(rawBuffer.toString()).second else ""
 
             val committedText = when {
                 hasCandidates -> candidates.getOrNull(selectedCandidateIndex) ?: candidates.firstOrNull() ?: previewKana
@@ -1004,7 +930,7 @@ class MeltypeSession(
                 // 文節伸縮で確定された残りの文字列を次のバッファとして引き継ぐ
                 rawBuffer.clear()
                 rawBuffer.append(remainderRaw)
-                clauseLength = 0
+                clauseManager.reset()
                 candidates = emptyList()
                 selectedCandidateIndex = 0
                 updatePreview()
@@ -1031,7 +957,7 @@ class MeltypeSession(
     fun reset() {
         synchronized(lock) {
             rawBuffer.clear()
-            clauseLength = 0
+            clauseManager.reset()
             previewKana = ""
             candidates = emptyList()
             selectedCandidateIndex = 0
