@@ -24,8 +24,8 @@ object MeltypeConfig {
     /** Google CGI API を使った高精度かな漢字変換を使用するか */
     var useGoogleCgi: Boolean = true
 
-    /** 変換候補の最大表示数 (1〜9) */
-    var maxCandidates: Int = 5
+    /** 変換候補の最大表示数 (7 または 9。生英字・ひらがなを枠内に残すため 7 未満にはしない) */
+    var maxCandidates: Int = 7
 
     /** タイポ自動補正を有効にするか */
     var typoCorrectionEnabled: Boolean = true
@@ -102,7 +102,7 @@ object MeltypeConfig {
             file.reader(StandardCharsets.UTF_8).use { props.load(it) }
 
             props.getProperty("enabled")?.toBooleanStrictOrNull()?.let { enabled = it }
-            props.getProperty("maxCandidates")?.toIntOrNull()?.let { maxCandidates = it.coerceIn(1, 9) }
+            props.getProperty("maxCandidates")?.toIntOrNull()?.let { maxCandidates = if (it >= 9) 9 else 7 }
             props.getProperty("initialInputMode")?.let {
                 initialInputMode = if (it.equals("HYBRID", ignoreCase = true)) InputMode.HYBRID else InputMode.DIRECT
             }

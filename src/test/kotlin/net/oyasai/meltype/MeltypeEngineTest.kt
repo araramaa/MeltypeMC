@@ -873,6 +873,25 @@ class MeltypeEngineTest {
     }
 
     /**
+     * 「Google変換を使わない」設定のとき、外部通信せずローカル変換のみが使われることの検証
+     */
+    @Test
+    fun testGoogleConverterIsSkippedWhenDisabled() {
+        val old = MeltypeConfig.useGoogleCgi
+        try {
+            MeltypeConfig.useGoogleCgi = false
+            val stub = object : net.oyasai.meltype.conversion.IConverter {
+                override fun convertAsync(reading: String) =
+                    java.util.concurrent.CompletableFuture.completedFuture(listOf("ローカル:$reading"))
+            }
+            val converter = net.oyasai.meltype.conversion.GoogleCgiConverter(stub)
+            assertEquals(listOf("ローカル:きょう"), converter.convertAsync("きょう").get())
+        } finally {
+            MeltypeConfig.useGoogleCgi = old
+        }
+    }
+
+    /**
      * 変換候補が多くても、打ったままのひらがなと生英字が候補の枠内に残ることの検証
      */
     @Test

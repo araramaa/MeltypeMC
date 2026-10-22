@@ -23,9 +23,9 @@ class MeltypeConfigScreen(
     private var listeningForKey = false
 
     companion object {
-        private const val BUTTON_WIDTH = 250
+        private const val BUTTON_WIDTH = 280
         private const val BUTTON_HEIGHT = 20
-        private const val ROW_SPACING = 24
+        private const val ROW_SPACING = 22
     }
 
     override fun init() {
@@ -34,16 +34,10 @@ class MeltypeConfigScreen(
         val centerX = width / 2
         var currentY = 48
 
-        // 1. 候補表示数 (3 -> 5 -> 7 -> 9 -> 3)
+        // 1. 候補表示数 (7 <-> 9)
         addRenderableWidget(
             Button.builder(getCandidatesButtonText()) { button ->
-                val next = when (MeltypeConfig.maxCandidates) {
-                    3 -> 5
-                    5 -> 7
-                    7 -> 9
-                    else -> 3
-                }
-                MeltypeConfig.maxCandidates = next
+                MeltypeConfig.maxCandidates = if (MeltypeConfig.maxCandidates == 7) 9 else 7
                 button.message = getCandidatesButtonText()
             }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
         )
@@ -98,7 +92,25 @@ class MeltypeConfigScreen(
         )
         currentY += ROW_SPACING
 
-        // 7. 入力モード切り替えキーの登録（押すと登録待ちになり、次に押したキーを登録）
+        // 7. Google 変換の使用（オフ時は打った文字を外部へ送らず、ローカル辞書のみで変換）
+        addRenderableWidget(
+            Button.builder(getGoogleButtonText()) { button ->
+                MeltypeConfig.useGoogleCgi = !MeltypeConfig.useGoogleCgi
+                button.message = getGoogleButtonText()
+            }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
+        )
+        currentY += ROW_SPACING
+
+        // 8. 日本語判定のしきい値 (1 -> 2 -> 3 -> 4 -> 1)
+        addRenderableWidget(
+            Button.builder(getThresholdButtonText()) { button ->
+                MeltypeConfig.japaneseThreshold = if (MeltypeConfig.japaneseThreshold in 1..3) MeltypeConfig.japaneseThreshold + 1 else 1
+                button.message = getThresholdButtonText()
+            }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
+        )
+        currentY += ROW_SPACING
+
+        // 9. 入力モード切り替えキーの登録（押すと登録待ちになり、次に押したキーを登録）
         toggleKeyButton = Button.builder(getToggleKeyButtonText()) { button ->
             listeningForKey = true
             button.message = getToggleKeyButtonText()
@@ -106,7 +118,7 @@ class MeltypeConfigScreen(
         addRenderableWidget(toggleKeyButton!!)
         currentY += ROW_SPACING + 4
 
-        // 8. 下段アクションボタン: 学習履歴リセット (左) & 完了/保存 (右)
+        // 10. 下段アクションボタン: 学習履歴リセット (左) & 完了/保存 (右)
         val halfWidth = (BUTTON_WIDTH - 6) / 2
 
         addRenderableWidget(
@@ -151,6 +163,15 @@ class MeltypeConfigScreen(
     private fun getLearningButtonText(): Component {
         val state = if (MeltypeConfig.learningEnabled) "有効 (ON)" else "無効 (OFF)"
         return Component.literal("変換学習機能: $state")
+    }
+
+    private fun getGoogleButtonText(): Component {
+        val state = if (MeltypeConfig.useGoogleCgi) "使う (打った文字をGoogleへ送信)" else "使わない (外部へ送信しない)"
+        return Component.literal("Google変換: $state")
+    }
+
+    private fun getThresholdButtonText(): Component {
+        return Component.literal("日本語判定のしきい値: ${MeltypeConfig.japaneseThreshold} (大きいほど英語になりやすい)")
     }
 
     private fun getToggleKeyButtonText(): Component {

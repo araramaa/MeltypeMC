@@ -1,5 +1,6 @@
 package net.oyasai.meltype.conversion
 
+import net.oyasai.meltype.config.MeltypeConfig
 import java.net.URI
 import java.net.URLEncoder
 import java.net.http.HttpClient
@@ -36,6 +37,11 @@ class GoogleCgiConverter(
         val trimmed = reading.trim()
         if (trimmed.isEmpty()) {
             return CompletableFuture.completedFuture(emptyList())
+        }
+
+        // 設定で Google 変換をオフにしている場合は、通信せずローカル辞書のみで変換
+        if (!MeltypeConfig.useGoogleCgi) {
+            return fallback.convertAsync(trimmed)
         }
 
         // キャッシュチェック

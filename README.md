@@ -35,12 +35,15 @@ Meltype（雪代氏作）の英日自動判別アルゴリズムをMinecraft（F
    - チャット欄先頭に現在の入力モードを表すアイコン（`[ あ ]` / `[ A ]`）を表示。
    - **左クリック**: 半角英数（DIRECT）と日本語（HYBRID）をワンクリックで手動切替。
    - **右クリック**: 専用設定メニューが開き、以下の項目を自由にカスタマイズ可能：
-     - 変換候補の表示数（3〜9個）
+     - 変換候補の表示数（7個 / 9個）
      - チャット開始時の初期モード
      - 前回入力モードの記憶・維持
      - アイコンの表示 / 非表示
      - コマンド時IME自動解除のON/OFF
      - 変換学習機能のON/OFF ＆ 学習履歴のクリア
+     - Google変換の使用 / 不使用（プライバシー設定。下の「プライバシーについて」を参照）
+     - 日本語判定のしきい値（大きいほど英語と判定されやすい）
+     - 入力モードの切り替えキーの登録（例: `F8`、`Ctrl+J`）
 
 5. **ゲーム内の主要テキスト入力画面にフル対応！**
    - **チャット画面 (`ChatScreen`)**
@@ -55,6 +58,14 @@ Meltype（雪代氏作）の英日自動判別アルゴリズムをMinecraft（F
 7. **完全内蔵型（全OS対応）**
    - Windows, Mac, Linux すべてに対応。外部アプリの常駐や設定は不要です。
    - チャット・テキスト入力画面内でのみ動作するため、WASD移動などのゲーム操作に干渉しません。
+
+---
+
+## 🔒 プライバシーについて / Privacy
+
+- 漢字への変換には、初期設定で **Google 日本語入力のオンライン変換サービス** を使います。変換のために、**ひらがなに直した入力中の文字（例:「きょうは」）が Google のサーバーに送信されます**。送信されるのは変換中の読みだけで、プレイヤー名やサーバー情報は送りません。
+- 送りたくない場合は、設定メニューの **「Google変換」を「使わない」** にしてください。外部への通信は行われなくなり、同梱の簡易辞書だけで変換します（変換できる語は少なくなります）。
+- By default, Meltype MC sends the hiragana reading you are converting (for example "きょうは") to Google's online Japanese transliteration service to get kanji candidates. Player names and server information are not sent. To stop this, set **"Google変換" (Google conversion) to "使わない" (off)** in the settings menu; the mod then converts offline with its small built-in dictionary only.
 
 ---
 
