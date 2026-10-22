@@ -3,10 +3,12 @@ package net.oyasai.meltype.gui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.screens.Screen
+import net.minecraft.client.input.KeyEvent
 import net.minecraft.network.chat.Component
 import net.oyasai.meltype.config.MeltypeConfig
 import net.oyasai.meltype.conversion.ConversionLearningStore
 import net.oyasai.meltype.engine.InputMode
+import org.lwjgl.glfw.GLFW
 
 /**
  * Meltype MC の設定画面
@@ -16,6 +18,9 @@ class MeltypeConfigScreen(
     private val parentScreen: Screen?,
     private val learningStore: ConversionLearningStore? = null
 ) : Screen(Component.literal("Meltype MC 設定")) {
+
+    private var toggleKeyButton: Button? = null
+    private var listeningForKey = false
 
     companion object {
         private const val BUTTON_WIDTH = 250
@@ -91,9 +96,17 @@ class MeltypeConfigScreen(
                 button.message = getLearningButtonText()
             }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
         )
+        currentY += ROW_SPACING
+
+        // 7. 入力モード切り替えキーの登録（押すと登録待ちになり、次に押したキーを登録）
+        toggleKeyButton = Button.builder(getToggleKeyButtonText()) { button ->
+            listeningForKey = true
+            button.message = getToggleKeyButtonText()
+        }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
+        addRenderableWidget(toggleKeyButton!!)
         currentY += ROW_SPACING + 4
 
-        // 7. 下段アクションボタン: 学習履歴リセット (左) & 完了/保存 (右)
+        // 8. 下段アクションボタン: 学習履歴リセット (左) & 完了/保存 (右)
         val halfWidth = (BUTTON_WIDTH - 6) / 2
 
         addRenderableWidget(
@@ -138,6 +151,57 @@ class MeltypeConfigScreen(
     private fun getLearningButtonText(): Component {
         val state = if (MeltypeConfig.learningEnabled) "有効 (ON)" else "無効 (OFF)"
         return Component.literal("変換学習機能: $state")
+    }
+
+    private fun getToggleKeyButtonText(): Component {
+        if (listeningForKey) {
+            return Component.literal("切り替えキー: キーを押してください (Esc: 解除)")
+        }
+        val keyName = if (MeltypeConfig.toggleKeyCode < 0) {
+            "未設定"
+        } else {
+            modifierPrefix(MeltypeConfig.toggleKeyModifiers) + keyName(MeltypeConfig.toggleKeyCode)
+        }
+        return Component.literal("切り替えキー: $keyName")
+    }
+
+    private fun modifierPrefix(modifiers: Int): String {
+        var prefix = ""
+        if ((modifiers and GLFW.GLFW_MOD_CONTROL) != 0) prefix += "Ctrl+"
+        if ((modifiers and GLFW.GLFW_MOD_ALT) != 0) prefix += "Alt+"
+        if ((modifiers and GLFW.GLFW_MOD_SHIFT) != 0) prefix += "Shift+"
+        return prefix
+    }
+
+    private fun keyName(keyCode: Int): String {
+        if (keyCode in GLFW.GLFW_KEY_F1..GLFW.GLFW_KEY_F25) return "F${keyCode - GLFW.GLFW_KEY_F1 + 1}"
+        val named = try { GLFW.glfwGetKeyName(keyCode, 0) } catch (_: Throwable) { null }
+        return named?.uppercase() ?: "キー$keyCode"
+    }
+
+    /** 登録待ちの間に押されたキーを切り替えキーとして保存（Esc で解除） */
+    override fun keyPressed(event: KeyEvent): Boolean {
+        if (!listeningForKey) return super.keyPressed(event)
+
+        val key = event.key()
+        val mods = event.modifiers() and MeltypeConfig.TOGGLE_MODIFIER_MASK
+        when {
+            key == GLFW.GLFW_KEY_ESCAPE -> {
+                MeltypeConfig.toggleKeyCode = -1
+                MeltypeConfig.toggleKeyModifiers = 0
+                listeningForKey = false
+            }
+            // 修飾キー単体は、次に押される本体キーを待つ
+            key in GLFW.GLFW_KEY_LEFT_SHIFT..GLFW.GLFW_KEY_RIGHT_SUPER -> return true
+            MeltypeConfig.isAllowedToggleKey(key, mods) -> {
+                MeltypeConfig.toggleKeyCode = key
+                MeltypeConfig.toggleKeyModifiers = mods
+                listeningForKey = false
+            }
+            else -> return true // 登録できないキーは無視して待機を続ける
+        }
+        toggleKeyButton?.message = getToggleKeyButtonText()
+        return true
     }
 
     override fun extractRenderState(extractor: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {

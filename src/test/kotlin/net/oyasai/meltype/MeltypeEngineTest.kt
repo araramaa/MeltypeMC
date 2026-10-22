@@ -873,6 +873,70 @@ class MeltypeEngineTest {
     }
 
     /**
+     * 変換候補が多くても、打ったままのひらがなと生英字が候補の枠内に残ることの検証
+     */
+    @Test
+    fun testFinalizerKeepsKanaAndRawWithinLimit() {
+        val many = (1..20).map { "候補$it" }
+        val result = CandidateFinalizer.finalize(many, "kyouha", "きょうは", 5)
+        assertTrue(result.size <= 9)
+        assertTrue(result.contains("きょうは"))
+        assertTrue(result.contains("kyouha"))
+    }
+
+    /**
+     * 設定画面で登録した切り替えキーで入力モードが切り替わり、通常の入力キーは登録できないことの検証
+     */
+    @Test
+    fun testCustomToggleKey() {
+        assertFalse(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_A, 0))
+        assertFalse(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_SPACE, 0))
+        assertFalse(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_ENTER, 0))
+        assertFalse(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_LEFT_SHIFT, 0))
+        assertTrue(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_F8, 0))
+        assertTrue(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_J, GLFW.GLFW_MOD_CONTROL))
+
+        val oldCode = MeltypeConfig.toggleKeyCode
+        val oldMods = MeltypeConfig.toggleKeyModifiers
+        try {
+            MeltypeConfig.toggleKeyCode = GLFW.GLFW_KEY_F8
+            MeltypeConfig.toggleKeyModifiers = 0
+            val session = MeltypeSession(
+                romajiDetector = romajiDetector,
+                englishDetector = englishDetector,
+                scoreEngine = scoreEngine,
+                slashCommandGate = slashGate
+            )
+            val before = session.currentInputMode
+            assertTrue(session.onKeyPressed(GLFW.GLFW_KEY_F8, 0, 0) {})
+            assertNotEquals(before, session.currentInputMode)
+            // 修飾キーが違う場合は反応しない
+            val after = session.currentInputMode
+            assertFalse(session.onKeyPressed(GLFW.GLFW_KEY_F8, 0, GLFW.GLFW_MOD_CONTROL) {})
+            assertEquals(after, session.currentInputMode)
+        } finally {
+            MeltypeConfig.toggleKeyCode = oldCode
+            MeltypeConfig.toggleKeyModifiers = oldMods
+        }
+    }
+
+    /**
+     * "hidarite"（左手）の末尾 "rite" が英単語と誤判定され「ひだrite」にならないことの検証
+     */
+    @Test
+    fun testPureRomajiWordIsNotSplitByShortEnglishWord() {
+        val splitter = CompoundWordSplitter(englishDetector, romajiDetector)
+        assertNull(splitter.splitSentence("hidarite"))
+        assertNull(splitter.split("hidarite"))
+        // "settei"（設定）の先頭 "set" も同様に英単語と誤判定されない
+        assertNull(splitter.splitSentence("settei"))
+        assertNull(splitter.split("settei"))
+        // "onegaishitai"（お願いしたい）の先頭 "one" も同様
+        assertNull(splitter.splitSentence("onegaishitai"))
+        assertNull(splitter.split("onegaishitai"))
+    }
+
+    /**
      * スペースなし一括入力 "kyouhadiamondwotoriniikou" のプレビューおよび変換の検証
      * 「今日はdiamondを取りに行こう」が第1候補として合成されること
      */

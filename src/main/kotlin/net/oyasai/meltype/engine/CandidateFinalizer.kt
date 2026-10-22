@@ -32,6 +32,16 @@ object CandidateFinalizer {
             distinct.remove(rawCandidate)
             distinct.add(minOf(maxCount - 1, distinct.size), rawCandidate)
         }
+        // kanaCandidate（打ったままのひらがな）も枠外にはみ出さず、raw の直前に必ず残す
+        if (kanaCandidate != null && kanaCandidate != rawCandidate && !distinct.take(maxCount).contains(kanaCandidate)) {
+            distinct.remove(kanaCandidate)
+            distinct.add(minOf(maxCount - 2, distinct.size), kanaCandidate)
+            // 挿入で押し出された rawCandidate を、再び枠内の末尾に戻す
+            if (!distinct.take(maxCount).contains(rawCandidate)) {
+                distinct.remove(rawCandidate)
+                distinct.add(minOf(maxCount - 1, distinct.size), rawCandidate)
+            }
+        }
 
         return distinct.take(maxCount).toMutableList()
     }

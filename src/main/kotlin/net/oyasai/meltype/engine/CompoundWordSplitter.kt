@@ -76,6 +76,15 @@ class CompoundWordSplitter(
     }
 
     /**
+     * 入力全体が（英単語を含まない前提で）完全に有効なローマ字として読め、かつ候補の英単語が短い場合は、
+     * 日本語の語の一部が英単語に誤判定されたとみなす（例: "hidarite" の末尾 "rite" は英単語ではなく「ひだりて」）
+     */
+    private fun isPureRomaji(raw: String): Boolean {
+        val analysis = romajiDetector.analyze(raw)
+        return analysis.isValid && analysis.partial.isEmpty()
+    }
+
+    /**
      * 文字列が「英単語 + 助詞/日本語ローマ字」の複合語であるかを判定し、分割結果を返します
      * @param raw スペースを含まない入力アルファベット列
      * @return 分割できた場合は CompoundSplit、分割できない場合は null
@@ -84,11 +93,13 @@ class CompoundWordSplitter(
         if (raw.length < 5) return null // 最低でも英単語3文字 + 助詞2文字（wo, ni, de 等）以上
 
         val lower = raw.lowercase()
+        val pureRomaji = isPureRomaji(lower)
 
         // 最長一致で英単語プレフィックスを探索 (末尾-1文字から3文字目まで走査)
         for (len in lower.length - 1 downTo 3) {
             val prefix = lower.substring(0, len)
             if (prefix in AmbiguousWords) continue
+            if (pureRomaji && prefix.length <= 4) continue
 
             if (englishDetector.isWord(prefix)) {
                 val remainder = lower.substring(len)
@@ -123,6 +134,7 @@ class CompoundWordSplitter(
     fun splitSentence(raw: String): MultiCompoundSplit? {
         if (raw.length < 5) return null
         val lower = raw.lowercase()
+        val pureRomaji = isPureRomaji(lower)
 
         // 走査: 長い英単語から順に、かつ前後の境界条件を満たすものを探索
         for (len in minOf(lower.length, 20) downTo 3) {
@@ -130,6 +142,7 @@ class CompoundWordSplitter(
                 val end = start + len
                 val candidate = lower.substring(start, end)
                 if (candidate in AmbiguousWords) continue
+                if (pureRomaji && candidate.length <= 4) continue
 
                 // 英単語辞書に含まれるか
                 if (!englishDetector.isWord(candidate)) continue

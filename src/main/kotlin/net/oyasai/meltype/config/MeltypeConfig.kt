@@ -1,6 +1,7 @@
 package net.oyasai.meltype.config
 
 import net.oyasai.meltype.engine.InputMode
+import org.lwjgl.glfw.GLFW
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.Properties
@@ -41,9 +42,37 @@ object MeltypeConfig {
     /** 変換学習機能（よく使う単語を記憶して最上位に表示）を有効にするか */
     var learningEnabled: Boolean = true
 
+    /** 入力モード切り替えキーの GLFW キーコード（-1: 未設定） */
+    var toggleKeyCode: Int = -1
+
+    /** 入力モード切り替えキーと同時に押す修飾キー（GLFW_MOD_SHIFT / CONTROL / ALT の組み合わせ） */
+    var toggleKeyModifiers: Int = 0
+
     init {
         load()
     }
+
+    /** 切り替えキーとして登録できるキーか（通常の文字入力・Enter・Backspace 等を奪わないための制限） */
+    fun isAllowedToggleKey(keyCode: Int, modifiers: Int): Boolean {
+        val hasCtrlOrAlt = (modifiers and (GLFW.GLFW_MOD_CONTROL or GLFW.GLFW_MOD_ALT)) != 0
+        return when (keyCode) {
+            GLFW.GLFW_KEY_ESCAPE, GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_TAB, GLFW.GLFW_KEY_BACKSPACE,
+            GLFW.GLFW_KEY_LEFT, GLFW.GLFW_KEY_RIGHT, GLFW.GLFW_KEY_UP, GLFW.GLFW_KEY_DOWN -> false
+            // 文字・数字・記号キー（GLFW 32〜96）は Ctrl / Alt との組み合わせのみ許可
+            in GLFW.GLFW_KEY_SPACE..GLFW.GLFW_KEY_GRAVE_ACCENT -> hasCtrlOrAlt
+            // 修飾キー単体（Shift / Ctrl / Alt / Super）は登録不可
+            in GLFW.GLFW_KEY_LEFT_SHIFT..GLFW.GLFW_KEY_RIGHT_SUPER -> false
+            else -> keyCode >= 0
+        }
+    }
+
+    /** 押されたキーが登録済みの切り替えキーと一致するか */
+    fun isToggleKey(keyCode: Int, modifiers: Int): Boolean {
+        return toggleKeyCode >= 0 && keyCode == toggleKeyCode &&
+            (modifiers and TOGGLE_MODIFIER_MASK) == toggleKeyModifiers
+    }
+
+    const val TOGGLE_MODIFIER_MASK: Int = GLFW.GLFW_MOD_SHIFT or GLFW.GLFW_MOD_CONTROL or GLFW.GLFW_MOD_ALT
 
     /**
      * 設定ファイルの取得
@@ -84,6 +113,8 @@ object MeltypeConfig {
             props.getProperty("japaneseThreshold")?.toIntOrNull()?.let { japaneseThreshold = it }
             props.getProperty("useGoogleCgi")?.toBooleanStrictOrNull()?.let { useGoogleCgi = it }
             props.getProperty("typoCorrectionEnabled")?.toBooleanStrictOrNull()?.let { typoCorrectionEnabled = it }
+            props.getProperty("toggleKeyCode")?.toIntOrNull()?.let { toggleKeyCode = it }
+            props.getProperty("toggleKeyModifiers")?.toIntOrNull()?.let { toggleKeyModifiers = it and TOGGLE_MODIFIER_MASK }
         } catch (_: Throwable) {
         }
     }
@@ -106,6 +137,8 @@ object MeltypeConfig {
             props.setProperty("japaneseThreshold", japaneseThreshold.toString())
             props.setProperty("useGoogleCgi", useGoogleCgi.toString())
             props.setProperty("typoCorrectionEnabled", typoCorrectionEnabled.toString())
+            props.setProperty("toggleKeyCode", toggleKeyCode.toString())
+            props.setProperty("toggleKeyModifiers", toggleKeyModifiers.toString())
 
             file.writer(StandardCharsets.UTF_8).use {
                 props.store(it, "Meltype MC Configuration")

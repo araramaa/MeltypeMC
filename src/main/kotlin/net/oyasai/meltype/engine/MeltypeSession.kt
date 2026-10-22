@@ -266,6 +266,12 @@ class MeltypeSession(
                 return true
             }
 
+            // 0.5 設定画面で登録した任意の切り替えキーによるモード切り替え
+            if (MeltypeConfig.isToggleKey(keyCode, modifiers)) {
+                toggleInputMode(insertToChat)
+                return true
+            }
+
             // 1. 半角/全角キーによるモード切り替え（ハイブリッド ↔ 直接入力）
             // Shift等の修飾キーが押されていない単独キー押下時のみモード切り替えを行う
             val noModifiers = (modifiers and (GLFW.GLFW_MOD_SHIFT or GLFW.GLFW_MOD_CONTROL or GLFW.GLFW_MOD_ALT)) == 0
