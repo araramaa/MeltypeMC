@@ -209,6 +209,19 @@ class MeltypeSession(
                     '~', '～', '〜' -> "～"
                     else -> c.toString()
                 }
+                if (hasCandidates) {
+                    // 変換後（候補表示中）に打った記号は、選択中の候補を確定してから続けて入力する
+                    // （バッファに足すだけだと、確定する候補に含まれず消えてしまうため）
+                    commitCurrent(insertToChat)
+                    if (isComposing) {
+                        // 文節伸縮の残りがバッファに戻っている場合は、その末尾に記号を足す
+                        rawBuffer.append(punctuation)
+                        updatePreview()
+                    } else {
+                        insertToChat(punctuation)
+                    }
+                    return true
+                }
                 rawBuffer.append(punctuation)
                 updatePreview()
                 return true

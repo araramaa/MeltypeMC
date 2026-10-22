@@ -365,6 +365,52 @@ class MeltypeEngineTest {
     }
 
     /**
+     * 語尾の「～」「、」「。」が、変換前・変換後のどちらに打っても消えないことの検証
+     */
+    @Test
+    fun testTrailingPunctuationIsNeverLost() {
+        val stub = object : net.oyasai.meltype.conversion.IConverter {
+            override fun convertAsync(reading: String) =
+                java.util.concurrent.CompletableFuture.completedFuture(listOf("漢[$reading]"))
+        }
+        fun newSession(): MeltypeSession {
+            val s = MeltypeSession(
+                romajiDetector = romajiDetector,
+                englishDetector = englishDetector,
+                scoreEngine = scoreEngine,
+                slashCommandGate = slashGate,
+                converter = stub,
+                learningStore = net.oyasai.meltype.conversion.ConversionLearningStore(
+                    java.io.File.createTempFile("meltype_punct", ".txt").also { it.deleteOnExit() })
+            )
+            s.toggleInputMode() // HYBRID
+            return s
+        }
+
+        for (punct in listOf('~', '.', ',')) {
+            val expectedMark = when (punct) { '~' -> "～"; '.' -> "。"; else -> "、" }
+
+            // A. 変換前に記号を打つ: "ikuyo~" → Space → Enter
+            val committedA = mutableListOf<String>()
+            val a = newSession()
+            for (c in "ikuyo") a.onCharTyped(c, "", { committedA.add(it) })
+            a.onCharTyped(punct, "", { committedA.add(it) })
+            a.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, { committedA.add(it) })
+            a.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, { committedA.add(it) })
+            assertTrue(committedA.joinToString("").contains(expectedMark), "変換前の $punct が消えた: $committedA")
+
+            // B. 変換後に記号を打つ: "ikuyo" → Space → ~ → Enter
+            val committedB = mutableListOf<String>()
+            val b = newSession()
+            for (c in "ikuyo") b.onCharTyped(c, "", { committedB.add(it) })
+            b.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, { committedB.add(it) })
+            b.onCharTyped(punct, "", { committedB.add(it) })
+            b.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, { committedB.add(it) })
+            assertTrue(committedB.joinToString("").contains(expectedMark), "変換後の $punct が消えた: $committedB")
+        }
+    }
+
+    /**
      * 変換学習機能のテスト:
      * よく使う変換候補が自動記録され、次回以降最優先（一番上）に繰り上がること
      */
