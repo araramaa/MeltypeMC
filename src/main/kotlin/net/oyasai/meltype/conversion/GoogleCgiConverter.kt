@@ -1,6 +1,7 @@
 package net.oyasai.meltype.conversion
 
 import net.oyasai.meltype.config.MeltypeConfig
+import net.oyasai.meltype.engine.addIfMissing
 import java.net.URI
 import java.net.URLEncoder
 import java.net.http.HttpClient
@@ -130,7 +131,7 @@ class GoogleCgiConverter(
         // 1文節のみの場合: そのまま候補リストを返す
         if (segments.size == 1) {
             val list = segments[0].candidates.toMutableList()
-            if (!list.contains(segments[0].reading)) list.add(segments[0].reading)
+            list.addIfMissing(segments[0].reading)
             return list.distinct()
         }
 

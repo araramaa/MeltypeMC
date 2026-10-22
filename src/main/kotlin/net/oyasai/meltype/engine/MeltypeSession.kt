@@ -516,8 +516,8 @@ class MeltypeSession(
         val raw = rawBuffer.toString()
         val kana = romajiDetector.toKanaLenient(raw)
         val list = mutableListOf(text)
-        if (!list.contains(raw)) list.add(raw)
-        if (!list.contains(kana)) list.add(kana)
+        list.addIfMissing(raw)
+        list.addIfMissing(kana)
         candidates = list
         selectedCandidateIndex = 0
     }
@@ -587,9 +587,9 @@ class MeltypeSession(
         val list = mutableListOf<String>()
         val learned = learningStore.getLearnedCandidates(activeKana)
         list.addAll(learned)
-        if (!list.contains(activeKana)) list.add(activeKana)
-        if (katakana.isNotEmpty() && katakana != activeKana && !list.contains(katakana)) list.add(katakana)
-        if (!list.contains(activeRawPart)) list.add(activeRawPart)
+        list.addIfMissing(activeKana)
+        if (katakana.isNotEmpty() && katakana != activeKana) list.addIfMissing(katakana)
+        list.addIfMissing(activeRawPart)
 
         candidates = list.distinct().toMutableList()
         selectedCandidateIndex = 0
@@ -603,9 +603,9 @@ class MeltypeSession(
                     val ranked = learningStore.rankCandidates(activeKana, resultList)
                     val fullList = mutableListOf<String>()
                     fullList.addAll(ranked)
-                    if (!fullList.contains(activeKana)) fullList.add(activeKana)
-                    if (katakana.isNotEmpty() && katakana != activeKana && !fullList.contains(katakana)) fullList.add(katakana)
-                    if (!fullList.contains(activeRawPart)) fullList.add(activeRawPart)
+                    fullList.addIfMissing(activeKana)
+                    if (katakana.isNotEmpty() && katakana != activeKana) fullList.addIfMissing(katakana)
+                    fullList.addIfMissing(activeRawPart)
 
                     candidates = CandidateFinalizer.finalize(fullList, activeRawPart, activeKana)
                     if (selectedCandidateIndex !in candidates.indices) {
