@@ -27,9 +27,6 @@ object MeltypeConfig {
     /** 変換候補の最大表示数 (7 または 9。生英字・ひらがなを枠内に残すため 7 未満にはしない) */
     var maxCandidates: Int = 7
 
-    /** タイポ自動補正を有効にするか */
-    var typoCorrectionEnabled: Boolean = true
-
     /** チャット画面等を開いた際の初期入力モード（デフォルト: HYBRID = 半角全角キー不要でそのまま日本語/英語自動判別） */
     var initialInputMode: InputMode = InputMode.HYBRID
 
@@ -112,7 +109,6 @@ object MeltypeConfig {
             props.getProperty("learningEnabled")?.toBooleanStrictOrNull()?.let { learningEnabled = it }
             props.getProperty("japaneseThreshold")?.toIntOrNull()?.let { japaneseThreshold = it }
             props.getProperty("useGoogleCgi")?.toBooleanStrictOrNull()?.let { useGoogleCgi = it }
-            props.getProperty("typoCorrectionEnabled")?.toBooleanStrictOrNull()?.let { typoCorrectionEnabled = it }
             props.getProperty("toggleKeyCode")?.toIntOrNull()?.let { toggleKeyCode = it }
             props.getProperty("toggleKeyModifiers")?.toIntOrNull()?.let { toggleKeyModifiers = it and TOGGLE_MODIFIER_MASK }
         } catch (_: Throwable) {
@@ -136,7 +132,6 @@ object MeltypeConfig {
             props.setProperty("learningEnabled", learningEnabled.toString())
             props.setProperty("japaneseThreshold", japaneseThreshold.toString())
             props.setProperty("useGoogleCgi", useGoogleCgi.toString())
-            props.setProperty("typoCorrectionEnabled", typoCorrectionEnabled.toString())
             props.setProperty("toggleKeyCode", toggleKeyCode.toString())
             props.setProperty("toggleKeyModifiers", toggleKeyModifiers.toString())
 

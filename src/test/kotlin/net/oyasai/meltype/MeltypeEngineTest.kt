@@ -1044,7 +1044,6 @@ class MeltypeEngineTest {
             val props = java.util.Properties()
             props.setProperty("japaneseThreshold", "3")
             props.setProperty("useGoogleCgi", "false")
-            props.setProperty("typoCorrectionEnabled", "false")
 
             tempFile.writer(java.nio.charset.StandardCharsets.UTF_8).use {
                 props.store(it, "Test")
@@ -1056,7 +1055,6 @@ class MeltypeEngineTest {
 
             assertEquals(3, loaded.getProperty("japaneseThreshold")?.toIntOrNull())
             assertEquals(false, loaded.getProperty("useGoogleCgi")?.toBooleanStrictOrNull())
-            assertEquals(false, loaded.getProperty("typoCorrectionEnabled")?.toBooleanStrictOrNull())
         } finally {
             tempFile.delete()
         }
