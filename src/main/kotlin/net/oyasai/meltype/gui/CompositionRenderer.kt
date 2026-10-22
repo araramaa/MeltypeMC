@@ -77,17 +77,39 @@ object CompositionRenderer {
                 intArrayOf(bx, by, BUTTON_WIDTH, BUTTON_HEIGHT)
             }
             // 看板編集画面
+            // 「完了」ボタンの左隣（ボタンが見つからない場合はバニラ座標で代用）
             screen is AbstractSignEditScreen || className.contains("Sign") -> {
-                intArrayOf((screenWidth / 2) - 100, screenHeight - 50, BUTTON_WIDTH, BUTTON_HEIGHT)
+                leftOfBottomButton(screen)
+                    ?: intArrayOf((screenWidth / 2) - 100 - BUTTON_WIDTH - 4, screenHeight / 4 + 124, BUTTON_WIDTH, BUTTON_HEIGHT)
             }
-            // 本編集画面
+            // 本編集画面: 「署名」ボタンの左隣（ボタンが見つからない場合はバニラ座標で代用）
             screen is BookEditScreen || className.contains("Book") -> {
-                intArrayOf((screenWidth / 2) - 80, screenHeight - 35, BUTTON_WIDTH, BUTTON_HEIGHT)
+                leftOfBottomButton(screen)
+                    ?: intArrayOf((screenWidth / 2) - 100 - BUTTON_WIDTH - 4, 200, BUTTON_WIDTH, BUTTON_HEIGHT)
             }
             // フォールバック
             else -> {
                 intArrayOf(2, screenHeight - 14, BUTTON_WIDTH, BUTTON_HEIGHT)
             }
+        }
+    }
+
+    /**
+     * 画面最下段のボタン列のうち最も左のボタン（看板の「完了」/ 本の「署名」）の左隣の矩形を算出
+     */
+    private fun leftOfBottomButton(screen: Screen): IntArray? {
+        return try {
+            val buttons = screen.children().filterIsInstance<AbstractWidget>().filter { it.visible }
+            val bottomY = buttons.maxOfOrNull { it.y } ?: return null
+            val target = buttons.filter { it.y == bottomY }.minByOrNull { it.x } ?: return null
+            intArrayOf(
+                maxOf(2, target.x - BUTTON_WIDTH - 4),
+                target.y + (target.height - BUTTON_HEIGHT) / 2,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT
+            )
+        } catch (_: Throwable) {
+            null
         }
     }
 
