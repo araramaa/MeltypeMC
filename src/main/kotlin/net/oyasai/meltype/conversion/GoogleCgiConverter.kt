@@ -20,6 +20,14 @@ class GoogleCgiConverter(
     private val fallback: IConverter = LocalDictionaryConverter()
 ) : IConverter {
 
+    private companion object {
+        /** レスポンス内の1文節 ["読み", ["候補1", "候補2", ...]] を抜き出す（毎回コンパイルしないよう定数化） */
+        val SEGMENT_PATTERN: Pattern = Pattern.compile("\\[\\\"([^\\\"]+)\\\",\\s*\\[([^\\]]*)\\]\\]")
+
+        /** 文節内の候補1つ分 "候補" を抜き出す */
+        val CANDIDATE_PATTERN: Pattern = Pattern.compile("\\\"([^\\\"]*)\\\"")
+    }
+
     private val httpClient: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(1000))
         .build()
@@ -96,15 +104,13 @@ class GoogleCgiConverter(
         val segments = mutableListOf<Segment>()
         try {
             // [["読み", ["候補1", "候補2", ...]], ...] の全文節を走査
-            val segmentPattern = Pattern.compile("\\[\\\"([^\\\"]+)\\\",\\s*\\[([^\\]]*)\\]\\]")
-            val segmentMatcher = segmentPattern.matcher(json)
+            val segmentMatcher = SEGMENT_PATTERN.matcher(json)
             while (segmentMatcher.find()) {
                 val reading = segmentMatcher.group(1)
                 val candBlock = segmentMatcher.group(2)
 
                 val cands = mutableListOf<String>()
-                val candPattern = Pattern.compile("\\\"([^\\\"]*)\\\"")
-                val candMatcher = candPattern.matcher(candBlock)
+                val candMatcher = CANDIDATE_PATTERN.matcher(candBlock)
                 while (candMatcher.find()) {
                     cands.add(candMatcher.group(1))
                 }

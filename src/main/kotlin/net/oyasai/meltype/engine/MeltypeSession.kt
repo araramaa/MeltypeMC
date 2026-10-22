@@ -408,16 +408,8 @@ class MeltypeSession(
                         return true
                     }
                     if (hasCandidates) {
-                        val count = candidates.size
-                        if (count > 0) {
-                            val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
-                            selectedCandidateIndex = if (shift) {
-                                if (selectedCandidateIndex - 1 < 0) count - 1 else selectedCandidateIndex - 1
-                            } else {
-                                (selectedCandidateIndex + 1) % count
-                            }
-                            updatePreviewForCurrentCandidate()
-                        }
+                        val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
+                        moveSelection(if (shift) -1 else 1)
                         return true
                     }
                 }
@@ -429,11 +421,7 @@ class MeltypeSession(
                         expandClause()
                         return true
                     }
-                    if (hasCandidates && candidates.isNotEmpty()) {
-                        selectedCandidateIndex = (selectedCandidateIndex + 1) % candidates.size
-                        updatePreviewForCurrentCandidate()
-                        return true
-                    }
+                    if (moveSelection(1)) return true
                 }
                 GLFW.GLFW_KEY_LEFT -> {
                     val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
@@ -441,29 +429,17 @@ class MeltypeSession(
                         shrinkClause()
                         return true
                     }
-                    if (hasCandidates && candidates.isNotEmpty()) {
-                        selectedCandidateIndex = if (selectedCandidateIndex - 1 < 0) candidates.size - 1 else selectedCandidateIndex - 1
-                        updatePreviewForCurrentCandidate()
-                        return true
-                    }
+                    if (moveSelection(-1)) return true
                 }
                 GLFW.GLFW_KEY_DOWN -> {
                     if (!hasCandidates && isComposing) {
                         triggerConversion()
                         return true
                     }
-                    if (hasCandidates && candidates.isNotEmpty()) {
-                        selectedCandidateIndex = (selectedCandidateIndex + 1) % candidates.size
-                        updatePreviewForCurrentCandidate()
-                        return true
-                    }
+                    if (moveSelection(1)) return true
                 }
                 GLFW.GLFW_KEY_UP -> {
-                    if (hasCandidates && candidates.isNotEmpty()) {
-                        selectedCandidateIndex = if (selectedCandidateIndex - 1 < 0) candidates.size - 1 else selectedCandidateIndex - 1
-                        updatePreviewForCurrentCandidate()
-                        return true
-                    }
+                    if (moveSelection(-1)) return true
                 }
 
                 // 1〜9の数字キー (メインキー & テンキー): 候補のダイレクト選択
@@ -479,30 +455,18 @@ class MeltypeSession(
                 }
 
                 // F6〜F10: 無変換ショートカット（最初に入力した文字そのままの形式変換）
-                GLFW.GLFW_KEY_F6 -> {
-                    if (isComposing) {
-                        applyDirectCandidate(romajiDetector.toKanaLenient(rawBuffer.toString()))
-                        return true
-                    }
-                }
-                GLFW.GLFW_KEY_F7 -> {
-                    if (isComposing) {
-                        applyDirectCandidate(romajiDetector.toKatakana(romajiDetector.toKanaLenient(rawBuffer.toString())))
-                        return true
-                    }
-                }
-                GLFW.GLFW_KEY_F9 -> {
-                    if (isComposing) {
-                        applyDirectCandidate(romajiDetector.toZenkakuAlpha(rawBuffer.toString()))
-                        return true
-                    }
-                }
-                GLFW.GLFW_KEY_F10 -> {
-                    // F10: 最初に入力した半角アルファベットそのまま！
-                    if (isComposing) {
-                        applyDirectCandidate(rawBuffer.toString())
-                        return true
-                    }
+                GLFW.GLFW_KEY_F6, GLFW.GLFW_KEY_F7, GLFW.GLFW_KEY_F9, GLFW.GLFW_KEY_F10 -> {
+                    val raw = rawBuffer.toString()
+                    val kana = romajiDetector.toKanaLenient(raw)
+                    applyDirectCandidate(
+                        when (keyCode) {
+                            GLFW.GLFW_KEY_F6 -> kana                                 // ひらがな
+                            GLFW.GLFW_KEY_F7 -> romajiDetector.toKatakana(kana)      // カタカナ
+                            GLFW.GLFW_KEY_F9 -> romajiDetector.toZenkakuAlpha(raw)   // 全角英数
+                            else -> raw                                              // F10: 半角英数そのまま
+                        }
+                    )
+                    return true
                 }
             }
 
@@ -528,6 +492,18 @@ class MeltypeSession(
         }
         candidates = modes
         selectedCandidateIndex = nextIdx
+    }
+
+    /**
+     * 候補の選択位置を step 分だけ動かす（端では反対側へ循環）
+     * @return 候補が無く動かせなかった場合は false
+     */
+    private fun moveSelection(step: Int): Boolean {
+        val count = candidates.size
+        if (count == 0) return false
+        selectedCandidateIndex = Math.floorMod(selectedCandidateIndex + step, count)
+        updatePreviewForCurrentCandidate()
+        return true
     }
 
     /**
