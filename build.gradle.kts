@@ -35,6 +35,12 @@ tasks.jar {
     }
 }
 
+// ビルド日時を jar に残さない（再現可能ビルド）
+tasks.withType<AbstractArchiveTask>().configureEach {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+
 tasks.processResources {
     filteringCharset = "UTF-8"
     inputs.property("version", project.version)
