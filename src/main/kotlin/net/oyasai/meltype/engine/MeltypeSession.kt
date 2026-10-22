@@ -33,6 +33,9 @@ class MeltypeSession(
     /** 文節伸縮マネージャー */
     private val clauseManager = ClauseManager()
 
+    /** 変換の種類の判定と候補の作り方を決めるプランナー */
+    private val conversionPlanner = ConversionPlanner(romajiDetector, scoreEngine, compoundWordSplitter, converter, learningStore)
+
     /** プレビュー文字列生成フォーマッター */
     private val previewFormatter = PreviewFormatter(romajiDetector, scoreEngine, compoundWordSplitter)
 
@@ -341,13 +344,13 @@ class MeltypeSession(
                     // ★英単語＋助詞/日本語の複合語・ハイブリッド文判定（例: "kyouhadiamondwotoriniikou", "diamondwosagasou"）
                     val multiCompound = compoundWordSplitter.splitSentence(currentRaw)
                     if (multiCompound != null) {
-                        triggerMultiCompoundConversion(multiCompound, currentRaw)
+                        applyPlan(conversionPlanner.planMultiCompound(multiCompound, currentRaw))
                         return true
                     }
 
                     val compound = compoundWordSplitter.split(currentRaw)
                     if (compound != null) {
-                        triggerCompoundConversion(compound, currentRaw)
+                        applyPlan(conversionPlanner.planCompound(compound, currentRaw))
                         return true
                     }
 
@@ -628,81 +631,25 @@ class MeltypeSession(
     }
 
     /**
-     * 変換リクエストの送信（単一単語およびスペース区切りハイブリッド文対応）
+     * 変換リクエストの送信
+     * 候補の作り方は [ConversionPlanner] が決め、ここでは即時候補の表示と、最終候補への差し替えだけを行う
      */
     private fun triggerConversion() {
-        val raw = rawBuffer.toString()
-        val text = previewKana.ifEmpty { raw }
-        activeReading = text
-        activeRaw = raw
+        applyPlan(conversionPlanner.plan(rawBuffer.toString(), previewKana))
+    }
 
-        // 1. スペース区切りハイブリッド文（例: "kyouha diamond wo sagasou"）の処理
-        if (raw.contains(' ')) {
-            triggerHybridSentenceConversion(raw)
-            return
-        }
-
-        // 2. 複合語・ハイブリッド文（例: "kyouhadiamondwotoriniikou" -> "今日はdiamondを取りに行こう"）
-        val multiCompound = compoundWordSplitter.splitSentence(raw)
-        if (multiCompound != null) {
-            triggerMultiCompoundConversion(multiCompound, raw)
-            return
-        }
-
-        // 3. 英単語＋助詞/日本語の複合語（例: "diamondwosagasou" -> "diamondを探そう"）の処理
-        val compound = compoundWordSplitter.split(raw)
-        if (compound != null) {
-            triggerCompoundConversion(compound, raw)
-            return
-        }
-
-        // 4. 単一単語の処理
-        val isEnglishDominant = scoreEngine.isEnglishInput(raw)
-        val initialKana = romajiDetector.toKanaLenient(raw)
-        val initialKatakana = romajiDetector.toKatakana(initialKana)
-        val rawCandidate = raw
-        val kanaCandidate = if (initialKana.isNotEmpty()) initialKana else raw
-        val katakanaCandidate = if (initialKatakana.isNotEmpty() && initialKatakana != initialKana) initialKatakana else null
-
-        // 即座に応答可能な初期候補をセット（★最初に入力した文字そのまま選べるように常時確保）
-        val immediateList = mutableListOf<String>()
-        if (isEnglishDominant) {
-            immediateList.add(rawCandidate)
-            if (kanaCandidate != rawCandidate) immediateList.add(kanaCandidate)
-            if (katakanaCandidate != null && katakanaCandidate != rawCandidate) immediateList.add(katakanaCandidate)
-        } else {
-            val learnedList = learningStore.getLearnedCandidates(text)
-            immediateList.addAll(learnedList)
-            if (!immediateList.contains(kanaCandidate)) immediateList.add(kanaCandidate)
-            if (katakanaCandidate != null && !immediateList.contains(katakanaCandidate)) immediateList.add(katakanaCandidate)
-            if (!immediateList.contains(rawCandidate)) immediateList.add(rawCandidate)
-        }
-
-        candidates = immediateList.distinct().take(9).toMutableList()
+    /** 計画の即時候補を表示し、最終候補が届いたら差し替える */
+    private fun applyPlan(plan: ConversionPlan) {
+        activeReading = plan.reading
+        activeRaw = plan.raw
+        candidates = plan.immediate
         selectedCandidateIndex = 0
 
-        // Google CGI / 辞書 による高精度かな漢字変換（最初に入力した英字・かなを必ず候補に保持！）
-        val convertTarget = if (isEnglishDominant && initialKana.isNotEmpty()) initialKana else text
-        converter.convertAsync(convertTarget).thenAccept { resultList ->
+        plan.final.thenAccept { finalList ->
             synchronized(lock) {
                 if (rawBuffer.isNotEmpty()) {
-                    val fullList = mutableListOf<String>()
-                    if (isEnglishDominant) {
-                        fullList.add(rawCandidate) // 第1候補: 英語
-                        fullList.addAll(resultList) // 第2候補以降: 漢字・カタカナ等
-                        if (!fullList.contains(kanaCandidate)) fullList.add(kanaCandidate)
-                        if (katakanaCandidate != null && !fullList.contains(katakanaCandidate)) fullList.add(katakanaCandidate)
-                    } else {
-                        val ranked = learningStore.rankCandidates(text, resultList)
-                        fullList.addAll(ranked)
-                        if (!fullList.contains(kanaCandidate)) fullList.add(kanaCandidate)
-                        if (katakanaCandidate != null && !fullList.contains(katakanaCandidate)) fullList.add(katakanaCandidate)
-                        // ★最初に入力したアルファベットそのままを必ず候補に含める！
-                        if (!fullList.contains(rawCandidate)) fullList.add(rawCandidate)
-                    }
-
-                    candidates = CandidateFinalizer.finalize(fullList, rawCandidate, kanaCandidate)
-                    if (selectedCandidateIndex !in candidates.indices) {
+                    candidates = finalList
+                    if (!plan.keepSelection || selectedCandidateIndex !in finalList.indices) {
                         selectedCandidateIndex = 0
                     }
                 }
@@ -711,147 +658,6 @@ class MeltypeSession(
             null
         }
     }
-
-    /**
-     * 複数セグメントからなるハイブリッド文（例: "kyouhadiamondwotoriniikou" -> "今日はdiamondを取りに行こう"）の変換
-     * 各日本語セグメントを Google CGI / 辞書 で変換し、英語セグメントと結合して候補を生成
-     */
-    private fun triggerMultiCompoundConversion(split: MultiCompoundSplit, raw: String) {
-        val preview = split.previewText
-        activeReading = preview
-        activeRaw = raw
-
-        // 即座に応答可能な初期候補
-        val immediateList = listOf(split.noSpaceText, split.previewText, raw).distinct().toMutableList()
-        candidates = immediateList
-        selectedCandidateIndex = 0
-
-        // 各セグメントの変換 Future
-        val segmentFutures = split.segments.map { segment ->
-            if (segment.isEnglish) {
-                java.util.concurrent.CompletableFuture.completedFuture(listOf(segment.raw))
-            } else {
-                converter.convertAsync(segment.reading).thenApply { res ->
-                    if (res.isNotEmpty()) res else listOf(segment.reading)
-                }.exceptionally { listOf(segment.reading) }
-            }
-        }
-
-        val allFutures = java.util.concurrent.CompletableFuture.allOf(*segmentFutures.toTypedArray())
-        allFutures.thenAccept {
-            synchronized(lock) {
-                if (rawBuffer.isNotEmpty()) {
-                    val segmentResults = segmentFutures.map { it.get() }
-                    // 第1候補: スペースなし結合（例: "今日はdiamondを取りに行こう"）
-                    val synthesizedNoSpace = split.segments.mapIndexed { idx, seg ->
-                        if (seg.isEnglish) seg.raw else segmentResults[idx].firstOrNull() ?: seg.reading
-                    }.joinToString("")
-
-                    // 第2候補: 英単語の周囲にスペースを入れた結合（例: "今日は diamond を取りに行こう"）
-                    val synthesizedSpaced = split.segments.mapIndexed { idx, seg ->
-                        if (seg.isEnglish) " ${seg.raw} " else segmentResults[idx].firstOrNull() ?: seg.reading
-                    }.joinToString("").replace("  ", " ").trim()
-
-                    val fullList = mutableListOf(synthesizedNoSpace, synthesizedSpaced)
-                    if (!fullList.contains(split.previewText)) fullList.add(split.previewText)
-                    if (!fullList.contains(raw)) fullList.add(raw)
-
-                    candidates = CandidateFinalizer.finalize(fullList, raw, split.previewText)
-                    selectedCandidateIndex = 0
-                }
-            }
-        }.exceptionally {
-            null
-        }
-    }
-
-    /**
-     * 英単語＋助詞/日本語の複合語（例: "diamondwosagasou"）を変換
-     * 英単語（"diamond"）は保護し、日本語部分（"wosagasou" -> "を探そう"）のみを変換して結合
-     */
-    private fun triggerCompoundConversion(compound: CompoundSplit, raw: String) {
-        activeReading = raw
-        activeRaw = raw
-        val initialKana = "${compound.english}${compound.japaneseKana}"
-
-        // ★学習済み候補の事前適用（複合語全体および日本語部分）
-        val learnedFull = learningStore.getLearnedCandidates(raw)
-        val learnedJp = learningStore.getLearnedCandidates(compound.japaneseKana).map { "${compound.english}$it" }
-        val immediateList = (learnedFull + learnedJp + listOf(initialKana, raw)).distinct().toMutableList()
-
-        candidates = immediateList
-        selectedCandidateIndex = 0
-
-        converter.convertAsync(compound.japaneseKana).thenAccept { resultList ->
-            synchronized(lock) {
-                if (rawBuffer.isNotEmpty()) {
-                    val fullList = resultList.map { "${compound.english}$it" }
-                    val ranked = learningStore.rankCandidates(raw, fullList)
-                    candidates = CandidateFinalizer.finalize(ranked + listOf(initialKana), raw, initialKana)
-                    selectedCandidateIndex = 0
-                }
-            }
-        }.exceptionally {
-            null
-        }
-    }
-
-    /**
-     * スペース区切りハイブリッド文（例: "kyouha diamond wo sagasou"）の変換
-     * 英単語は英語のまま保護し、日本語トークンのみを変換して結合する
-     */
-    private fun triggerHybridSentenceConversion(rawSentence: String) {
-        val tokens = rawSentence.split(' ')
-
-        // 即座に初期プレビュー候補を生成
-        val immediateSentence = tokens.joinToString(" ") { token ->
-            if (token.isEmpty()) ""
-            else if (scoreEngine.isPureEnglishWord(token)) token
-            else {
-                val compound = compoundWordSplitter.split(token)
-                if (compound != null) "${compound.english}${compound.japaneseKana}"
-                else romajiDetector.toKanaLenient(token)
-            }
-        }
-        candidates = listOf(immediateSentence, rawSentence)
-        selectedCandidateIndex = 0
-
-        // 各トークンごとに変換（複合語、英単語、日本語をそれぞれ最適処理）
-        val convertedTokensFutures = tokens.map { token ->
-            val compound = compoundWordSplitter.split(token)
-            if (compound != null) {
-                converter.convertAsync(compound.japaneseKana).thenApply { res ->
-                    val best = res.firstOrNull() ?: compound.japaneseKana
-                    listOf("${compound.english}$best")
-                }.exceptionally { listOf("${compound.english}${compound.japaneseKana}") }
-            } else if (token.isEmpty() || scoreEngine.isPureEnglishWord(token) || scoreEngine.evaluate(token, isFinal = true).verdict == Verdict.ENGLISH) {
-                java.util.concurrent.CompletableFuture.completedFuture(listOf(token))
-            } else {
-                val kana = romajiDetector.toKanaLenient(token)
-                converter.convertAsync(kana).thenApply { res ->
-                    if (res.isNotEmpty()) res else listOf(kana)
-                }.exceptionally { listOf(kana) }
-            }
-        }
-
-        // すべてのトークンの変換が完了したら結合
-        val allFutures = java.util.concurrent.CompletableFuture.allOf(*convertedTokensFutures.toTypedArray())
-        allFutures.thenAccept {
-            synchronized(lock) {
-                if (rawBuffer.isNotEmpty()) {
-                    val tokenCandidates = convertedTokensFutures.map { it.get() }
-                    val synthesized1 = tokenCandidates.joinToString(" ") { it.firstOrNull() ?: "" }
-                    val list = mutableListOf(synthesized1)
-                    if (!list.contains(immediateSentence)) list.add(immediateSentence)
-                    candidates = CandidateFinalizer.finalize(list, rawSentence, immediateSentence)
-                    selectedCandidateIndex = 0
-                }
-            }
-        }.exceptionally {
-            null
-        }
-    }
-
     /** 現在選択中の候補（またはプレビュー文字列）を確定してチャット欄に挿入 */
     fun commitCurrent(insertToChat: (String) -> Unit) {
         synchronized(lock) {
