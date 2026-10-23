@@ -21,6 +21,7 @@ class MeltypeConfigScreen(
 
     private var toggleKeyButton: Button? = null
     private var listeningForKey = false
+    private var rejectedReason: String? = null
 
     companion object {
         private const val BUTTON_WIDTH = 280
@@ -113,6 +114,7 @@ class MeltypeConfigScreen(
         // 9. 入力モード切り替えキーの登録（押すと登録待ちになり、次に押したキーを登録）
         toggleKeyButton = Button.builder(getToggleKeyButtonText()) { button ->
             listeningForKey = true
+            rejectedReason = null
             button.message = getToggleKeyButtonText()
         }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
         addRenderableWidget(toggleKeyButton!!)
@@ -176,7 +178,10 @@ class MeltypeConfigScreen(
 
     private fun getToggleKeyButtonText(): Component {
         if (listeningForKey) {
-            return Component.literal("切り替えキー: キーを押してください (Esc: 解除)")
+            val reason = rejectedReason
+            return Component.literal(
+                if (reason == null) "切り替えキー: キーを押してください (Esc: 解除)" else "× $reason"
+            )
         }
         val keyName = if (MeltypeConfig.toggleKeyCode < 0) {
             "未設定"
@@ -184,6 +189,14 @@ class MeltypeConfigScreen(
             modifierPrefix(MeltypeConfig.toggleKeyModifiers) + keyName(MeltypeConfig.toggleKeyCode)
         }
         return Component.literal("切り替えキー: $keyName")
+    }
+
+    /** 登録できなかったキーの理由（ボタンに表示する短い説明） */
+    private fun rejectReason(key: Int): String = when {
+        key < 0 -> "登録できないキーです。別のキーを"
+        key in GLFW.GLFW_KEY_SPACE..GLFW.GLFW_KEY_GRAVE_ACCENT ->
+            "文字キーは Ctrl か Alt と一緒に"
+        else -> "登録できないキーです。別のキーを"
     }
 
     private fun modifierPrefix(modifiers: Int): String {
@@ -219,8 +232,14 @@ class MeltypeConfigScreen(
                 MeltypeConfig.toggleKeyModifiers = mods
                 listeningForKey = false
             }
-            else -> return true // 登録できないキーは無視して待機を続ける
+            else -> {
+                // 登録できないキーは登録せず、理由を表示して待機を続ける
+                rejectedReason = rejectReason(key)
+                toggleKeyButton?.message = getToggleKeyButtonText()
+                return true
+            }
         }
+        rejectedReason = null
         toggleKeyButton?.message = getToggleKeyButtonText()
         return true
     }
