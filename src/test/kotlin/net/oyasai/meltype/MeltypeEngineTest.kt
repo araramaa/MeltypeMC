@@ -4,6 +4,7 @@ import net.oyasai.meltype.config.MeltypeConfig
 import net.oyasai.meltype.engine.*
 import org.lwjgl.glfw.GLFW
 import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
@@ -14,17 +15,37 @@ class MeltypeEngineTest {
     private lateinit var scoreEngine: ScoreEngine
     private lateinit var slashGate: SlashCommandGate
 
+    // テスト中に変更する設定値の元の値（AfterEach で戻す）
+    private var originalUseGoogleCgi = true
+    private var originalLearningEnabled = true
+
     @BeforeEach
     fun setUp() {
         MeltypeConfig.enabled = true
         MeltypeConfig.initialInputMode = InputMode.DIRECT
         MeltypeConfig.rememberLastInputMode = true
 
+        // 実際のGoogle通信と共有の学習ファイルに依存しないようにする
+        originalUseGoogleCgi = MeltypeConfig.useGoogleCgi
+        originalLearningEnabled = MeltypeConfig.learningEnabled
+        MeltypeConfig.useGoogleCgi = false
+        MeltypeConfig.learningEnabled = true
+
         romajiDetector = RomajiDetector()
         englishDetector = EnglishDetector.loadFromResource("/dictionaries/english-words.txt")
         scoreEngine = ScoreEngine(romajiDetector, englishDetector)
         slashGate = SlashCommandGate()
     }
+
+    @AfterEach
+    fun tearDown() {
+        MeltypeConfig.useGoogleCgi = originalUseGoogleCgi
+        MeltypeConfig.learningEnabled = originalLearningEnabled
+    }
+
+    /** テストごとの一時ファイルを使う学習ストア（共有の学習ファイルを使わない） */
+    private fun newTempLearningStore() = net.oyasai.meltype.conversion.ConversionLearningStore(
+        java.io.File.createTempFile("meltype_test_learning", ".txt").also { it.deleteOnExit() })
 
     @Test
     fun testRomajiAnalysis() {
@@ -105,11 +126,15 @@ class MeltypeEngineTest {
         val committed = mutableListOf<String>()
         val insertToChat: (String) -> Unit = { committed.add(it) }
 
+        // このテストは「変換結果が届く前の即時候補（ひらがな）で確定する」流れを検証している。
+        // 以前は本物の Google 通信が遅れて届くことで成り立っていたため、結果を返さない変換器で同じ状況を作る。
         val session = MeltypeSession(
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            converter = DelayedConverter(),
+            learningStore = newTempLearningStore()
         )
 
         // 初期状態は DIRECT モード
@@ -164,7 +189,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         // HYBRIDモードに切り替え
@@ -193,7 +219,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         // チャット開始時は DIRECT モード（何もしなければ通常の半角英数入力）
@@ -222,7 +249,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         // 初回は DIRECT（半角英数）
@@ -313,7 +341,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         // 1. DIRECTモード（非変換中）で Shift+F12 を押すと即座に「～」が挿入されること
@@ -411,6 +440,217 @@ class MeltypeEngineTest {
     }
 
     /**
+     * 変換後（候補表示中）に Shift+F12 の「～」や Shift+Space の空白を足しても、確定時に消えないことの検証
+     */
+    @Test
+    fun testShiftF12AndShiftSpaceAfterConversionAreNeverLost() {
+        val stub = object : net.oyasai.meltype.conversion.IConverter {
+            override fun convertAsync(reading: String) =
+                java.util.concurrent.CompletableFuture.completedFuture(listOf("漢[$reading]"))
+        }
+        fun newSession(): MeltypeSession {
+            val s = MeltypeSession(
+                romajiDetector = romajiDetector,
+                englishDetector = englishDetector,
+                scoreEngine = scoreEngine,
+                slashCommandGate = slashGate,
+                converter = stub,
+                learningStore = newTempLearningStore()
+            )
+            s.toggleInputMode() // HYBRID
+            return s
+        }
+
+        // A. "ikuyo" → Space → Shift+F12 → Enter
+        val committedA = mutableListOf<String>()
+        val a = newSession()
+        for (c in "ikuyo") a.onCharTyped(c, "", { committedA.add(it) })
+        a.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, { committedA.add(it) })
+        assertTrue(a.hasCandidates)
+        assertTrue(a.onKeyPressed(GLFW.GLFW_KEY_F12, 0, GLFW.GLFW_MOD_SHIFT, { committedA.add(it) }))
+        a.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, { committedA.add(it) })
+        assertEquals("漢[いくよ]～", committedA.joinToString(""), "変換後の Shift+F12 の「～」が消えた: $committedA")
+
+        // B. "ikuyo" → Space → Shift+Space → Enter
+        val committedB = mutableListOf<String>()
+        val b = newSession()
+        for (c in "ikuyo") b.onCharTyped(c, "", { committedB.add(it) })
+        b.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, { committedB.add(it) })
+        assertTrue(b.hasCandidates)
+        assertTrue(b.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, GLFW.GLFW_MOD_SHIFT, { committedB.add(it) }))
+        b.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, { committedB.add(it) })
+        assertEquals("漢[いくよ] ", committedB.joinToString(""), "変換後の Shift+Space の空白が消えた: $committedB")
+    }
+
+    /**
+     * Google CGI のレスポンスに「\"」「]」や \u エスケープを含む候補があっても、正しく読み取れることの検証
+     */
+    @Test
+    fun testGoogleCgiResponseParsesEscapedCandidates() {
+        val converter = net.oyasai.meltype.conversion.GoogleCgiConverter()
+
+        // 候補に「"」を含む（JSON では \" と書かれる）
+        val quoted = converter.parseGoogleCgiResponse("""[["かぎ",["\"鍵\"","鍵","かぎ"]]]""", "かぎ")
+        assertEquals(listOf("\"鍵\"", "鍵", "かぎ"), quoted)
+
+        // 候補に「]」を含む
+        val bracket = converter.parseGoogleCgiResponse("""[["かっこ",["]","括弧"]]]""", "かっこ")
+        assertEquals(listOf("]", "括弧", "かっこ"), bracket)
+
+        // \u エスケープ（「 = 「）
+        val unicode = converter.parseGoogleCgiResponse("""[["かぎかっこ",["「","鉤括弧"]]]""", "かぎかっこ")
+        assertEquals(listOf("「", "鉤括弧", "かぎかっこ"), unicode)
+
+        // 複数文節（従来どおり、各文節の第1候補をつなげた文が先頭）
+        val sentence = converter.parseGoogleCgiResponse(
+            """[["きょうは",["今日は","京は"]],["さがそう",["探そう","捜そう"]]]""", "きょうはさがそう"
+        )
+        assertEquals("今日は探そう", sentence[0])
+        assertTrue(sentence.contains("京は捜そう"))
+        assertTrue(sentence.contains("きょうはさがそう"))
+
+        // 壊れたレスポンスは、元の読みをそのまま返す
+        assertEquals(listOf("かぎ"), converter.parseGoogleCgiResponse("""[["かぎ",["鍵"""", "かぎ"))
+    }
+
+    /**
+     * タブや改行を含む読み・候補は学習しない（保存ファイルの1行1件の形式が崩れないこと）の検証
+     */
+    @Test
+    fun testLearningIgnoresTabAndNewline() {
+        val tempFile = java.io.File.createTempFile("meltype_learning_tab_test", ".txt")
+        tempFile.deleteOnExit()
+        val store = net.oyasai.meltype.conversion.ConversionLearningStore(tempFile)
+
+        store.recordSelection("たいや", "鯛焼き")
+        store.recordSelection("たい\tや", "タイヤ")
+        store.recordSelection("たいや", "タイ\nヤ")
+        store.recordSelection("たいや", "タイ\rヤ")
+        assertEquals(listOf("鯛焼き"), store.getLearnedCandidates("たいや"))
+        assertTrue(store.getLearnedCandidates("たい\tや").isEmpty())
+        store.save()
+
+        // 再読み込みしても、正しい1件だけが残っていること
+        val reloaded = net.oyasai.meltype.conversion.ConversionLearningStore(tempFile)
+        assertEquals(listOf("鯛焼き"), reloaded.getLearnedCandidates("たいや"))
+        val dataLines = tempFile.readLines(Charsets.UTF_8).filter { it.isNotBlank() && !it.startsWith("#") }
+        assertEquals(1, dataLines.size, "保存ファイルが崩れていないこと: $dataLines")
+    }
+
+    /**
+     * 結果が遅れて届く変換器（手動で complete するまで結果を返さない）
+     */
+    private class DelayedConverter : net.oyasai.meltype.conversion.IConverter {
+        val pending = mutableListOf<java.util.concurrent.CompletableFuture<List<String>>>()
+        override fun convertAsync(reading: String): java.util.concurrent.CompletableFuture<List<String>> {
+            val f = java.util.concurrent.CompletableFuture<List<String>>()
+            pending.add(f)
+            return f
+        }
+    }
+
+    private fun newDelayedSession(converter: DelayedConverter): MeltypeSession {
+        val s = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate,
+            converter = converter,
+            learningStore = net.oyasai.meltype.conversion.ConversionLearningStore(
+                java.io.File.createTempFile("meltype_stale", ".txt").also { it.deleteOnExit() })
+        )
+        s.toggleInputMode() // HYBRID
+        return s
+    }
+
+    /**
+     * 確定済みの変換に対する遅れた結果が、次の入力の候補として混入しないことの検証
+     * （混入すると、次の1文字で古い候補が再挿入され二重入力・文字消失になる）
+     */
+    @Test
+    fun testStaleAsyncResultDoesNotLeakIntoNextInput() {
+        val committed = mutableListOf<String>()
+        val insertToChat: (String) -> Unit = { committed.add(it) }
+        val converter = DelayedConverter()
+        val session = newDelayedSession(converter)
+
+        // "kyouha" → Space（結果はまだ届かない）→ Enter で即時候補を確定
+        for (c in "kyouha") session.onCharTyped(c, "", insertToChat)
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, insertToChat)
+        assertTrue(session.hasCandidates)
+        session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, insertToChat)
+        assertEquals(listOf("きょうは"), committed)
+
+        // 次の入力 "a" を打つ
+        session.onCharTyped('a', "", insertToChat)
+        assertTrue(session.isComposing)
+
+        // ここで古い変換結果が届く
+        converter.pending.forEach { it.complete(listOf("今日は", "京は")) }
+
+        assertFalse(session.hasCandidates, "古い変換結果が次の入力の候補として表示されないこと")
+
+        // 続けて "r" を打っても、古い候補「今日は」が再挿入されないこと
+        session.onCharTyped('r', "", insertToChat)
+        assertEquals(listOf("きょうは"), committed, "古い候補が再挿入されないこと")
+        assertEquals("ar", session.rawBuffer.toString(), "入力中の文字が失われないこと")
+    }
+
+    /**
+     * 変換を取り消した（Backspace）後に結果が届いても、候補が復活しないことの検証
+     */
+    @Test
+    fun testStaleAsyncResultDoesNotReviveCandidatesAfterBackspace() {
+        val converter = DelayedConverter()
+        val session = newDelayedSession(converter)
+
+        for (c in "kyouha") session.onCharTyped(c, "") {}
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0) {}
+        assertTrue(session.hasCandidates)
+
+        // Backspace で変換を取り消す
+        session.onKeyPressed(GLFW.GLFW_KEY_BACKSPACE, 0, 0) {}
+        assertFalse(session.hasCandidates)
+
+        // 取り消し後に結果が届く
+        converter.pending.forEach { it.complete(listOf("今日は", "京は")) }
+        assertFalse(session.hasCandidates, "取り消した変換の結果で候補が復活しないこと")
+    }
+
+    /**
+     * 正常系: 変換結果が遅れて届いたとき（入力に変化なし）は、候補が最終候補に差し替わることの検証
+     */
+    @Test
+    fun testAsyncResultAppliesWhenInputUnchanged() {
+        val converter = DelayedConverter()
+        val session = newDelayedSession(converter)
+
+        for (c in "kyouha") session.onCharTyped(c, "") {}
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0) {}
+        converter.pending.forEach { it.complete(listOf("今日は")) }
+
+        assertTrue(session.candidates.contains("今日は"), "最新の変換結果は候補に反映されること")
+    }
+
+    /**
+     * 文節伸縮（Shift+左）の遅れた結果も、取り消し後には反映されないことの検証
+     */
+    @Test
+    fun testStaleClauseResultDoesNotReviveCandidatesAfterBackspace() {
+        val converter = DelayedConverter()
+        val session = newDelayedSession(converter)
+
+        for (c in "kyouhadiamond") session.onCharTyped(c, "") {}
+        session.onKeyPressed(GLFW.GLFW_KEY_LEFT, 0, GLFW.GLFW_MOD_SHIFT) {}
+        assertTrue(session.hasCandidates)
+        session.onKeyPressed(GLFW.GLFW_KEY_BACKSPACE, 0, 0) {}
+        assertFalse(session.hasCandidates)
+
+        converter.pending.forEach { it.complete(listOf("今日")) }
+        assertFalse(session.hasCandidates, "取り消した文節変換の結果で候補が復活しないこと")
+    }
+
+    /**
      * 変換学習機能のテスト:
      * よく使う変換候補が自動記録され、次回以降最優先（一番上）に繰り上がること
      */
@@ -440,6 +680,63 @@ class MeltypeEngineTest {
         val reloadedStore = net.oyasai.meltype.conversion.ConversionLearningStore(tempFile)
         val reloadedRanked = reloadedStore.rankCandidates("たいや", defaultCandidates)
         assertEquals("鯛焼き", reloadedRanked[0])
+    }
+
+    /**
+     * 設定で「変換学習機能」を OFF にすると、記録も並べ替えもされず、
+     * ON に戻すと元の学習が効くことの検証
+     */
+    @Test
+    fun testLearningDisabledSkipsRecordingAndRanking() {
+        val tempFile = java.io.File.createTempFile("meltype_learning_off_test", ".txt")
+        tempFile.deleteOnExit()
+        val store = net.oyasai.meltype.conversion.ConversionLearningStore(tempFile)
+        val defaultCandidates = listOf("タイヤ", "鯛焼き", "たいや")
+
+        // ON の間に「鯛焼き」を学習
+        store.recordSelection("たいや", "鯛焼き")
+        assertEquals(listOf("鯛焼き"), store.getLearnedCandidates("たいや"))
+
+        MeltypeConfig.learningEnabled = false
+        // OFF の間は並べ替えず、学習済み候補も返さない
+        assertEquals(defaultCandidates, store.rankCandidates("たいや", defaultCandidates))
+        assertTrue(store.getLearnedCandidates("たいや").isEmpty())
+
+        // OFF の間は記録されない
+        store.recordSelection("たいや", "タイヤ")
+        store.recordSelection("たいや", "タイヤ")
+
+        // ON に戻すと、元の学習だけが効く（OFF 中の選択は記録されていない）
+        MeltypeConfig.learningEnabled = true
+        assertEquals(listOf("鯛焼き"), store.getLearnedCandidates("たいや"))
+        assertEquals(listOf("鯛焼き", "タイヤ", "たいや"), store.rankCandidates("たいや", defaultCandidates))
+    }
+
+    /**
+     * 学習機能が OFF のセッションでは、候補を確定しても学習されないことの検証
+     */
+    @Test
+    fun testSessionDoesNotLearnWhenLearningDisabled() {
+        MeltypeConfig.learningEnabled = false
+        val store = newTempLearningStore()
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate,
+            converter = net.oyasai.meltype.conversion.LocalDictionaryConverter(),
+            learningStore = store
+        )
+        session.toggleInputMode()
+
+        for (c in "kyouha") session.onCharTyped(c, "") {}
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0) {}
+        session.onKeyPressed(GLFW.GLFW_KEY_DOWN, 0, 0) {}
+        session.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0) {}
+
+        // ON に戻しても、OFF 中の確定は学習されていない
+        MeltypeConfig.learningEnabled = true
+        assertTrue(store.getLearnedCandidates("きょうは").isEmpty())
     }
 
     /**
@@ -517,6 +814,9 @@ class MeltypeEngineTest {
         } finally {
             MeltypeConfig.maxCandidates = originalCandidates
             MeltypeConfig.initialInputMode = originalInitialMode
+            // setUp で一時的に変えた値を、設定ファイルへ保存しないよう先に戻す
+            MeltypeConfig.useGoogleCgi = originalUseGoogleCgi
+            MeltypeConfig.learningEnabled = originalLearningEnabled
             MeltypeConfig.save()
         }
     }
@@ -557,7 +857,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         // HYBRIDモードに設定
@@ -604,7 +905,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         session.setInputMode(InputMode.HYBRID, insertToChat)
@@ -637,7 +939,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         session.setInputMode(InputMode.HYBRID, insertToChat)
@@ -670,7 +973,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         session.setInputMode(InputMode.HYBRID, insertToChat)
@@ -703,7 +1007,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         session.setInputMode(InputMode.HYBRID, insertToChat)
@@ -734,7 +1039,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         session.setInputMode(InputMode.HYBRID, insertToChat)
@@ -762,7 +1068,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         session.setInputMode(InputMode.HYBRID, insertToChat)
@@ -789,7 +1096,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         session.setInputMode(InputMode.HYBRID, insertToChat)
@@ -824,7 +1132,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         session.setInputMode(InputMode.HYBRID, insertToChat)
@@ -970,7 +1279,8 @@ class MeltypeEngineTest {
                 romajiDetector = romajiDetector,
                 englishDetector = englishDetector,
                 scoreEngine = scoreEngine,
-                slashCommandGate = slashGate
+                slashCommandGate = slashGate,
+                learningStore = newTempLearningStore()
             )
             val before = session.currentInputMode
             assertTrue(session.onKeyPressed(GLFW.GLFW_KEY_F8, 0, 0) {})
@@ -1014,7 +1324,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         session.setInputMode(InputMode.HYBRID, insertToChat)
@@ -1048,7 +1359,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
 
         session.setInputMode(InputMode.HYBRID, insertToChat)
@@ -1119,7 +1431,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
         session.setInputMode(InputMode.HYBRID, insertToChat)
 
@@ -1155,7 +1468,8 @@ class MeltypeEngineTest {
             romajiDetector = romajiDetector,
             englishDetector = englishDetector,
             scoreEngine = scoreEngine,
-            slashCommandGate = slashGate
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
         )
         session.setInputMode(InputMode.HYBRID, insertToChat)
 

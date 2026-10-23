@@ -1,5 +1,6 @@
 package net.oyasai.meltype.conversion
 
+import net.oyasai.meltype.config.MeltypeConfig
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -64,6 +65,8 @@ class ConversionLearningStore(
      * 読みに対する候補リストを学習履歴に基づいて再ランク付け（最有力候補を先頭へ）
      */
     fun rankCandidates(reading: String, defaultCandidates: List<String>): List<String> {
+        // 設定で学習機能が OFF のときは並べ替えない（記録済みデータは消さず、ON に戻せば復活する）
+        if (!MeltypeConfig.learningEnabled) return defaultCandidates
         val candidateMap = memoryStore[reading]
         if (candidateMap.isNullOrEmpty()) {
             return defaultCandidates
@@ -94,6 +97,7 @@ class ConversionLearningStore(
      * 特定の読みに対して学習済みの候補一覧を取得
      */
     fun getLearnedCandidates(reading: String): List<String> {
+        if (!MeltypeConfig.learningEnabled) return emptyList()
         val candidateMap = memoryStore[reading] ?: return emptyList()
         return candidateMap.values
             .sortedWith(compareByDescending<LearnedCandidate> { it.count }.thenByDescending { it.lastUsed })
@@ -104,9 +108,13 @@ class ConversionLearningStore(
      * ユーザーによる候補選択を学習（確定回数を加算し、最終使用時刻を更新）
      */
     fun recordSelection(reading: String, candidate: String) {
+        // 設定で学習機能が OFF のときは記録も保存もしない
+        if (!MeltypeConfig.learningEnabled) return
         val trimmedReading = reading.trim()
         val trimmedCandidate = candidate.trim()
         if (trimmedReading.isEmpty() || trimmedCandidate.isEmpty()) return
+        // タブ・改行を含むと保存ファイル（1行1件・タブ区切り）が崩れるため学習しない
+        if (hasLineBreakOrTab(trimmedReading) || hasLineBreakOrTab(trimmedCandidate)) return
 
         val candidateMap = memoryStore.computeIfAbsent(trimmedReading) { ConcurrentHashMap() }
         candidateMap.compute(trimmedCandidate) { _, existing ->
@@ -119,6 +127,9 @@ class ConversionLearningStore(
 
         saveAsync()
     }
+
+    private fun hasLineBreakOrTab(text: String): Boolean =
+        text.any { it == '\t' || it == '\n' || it == '\r' }
 
     /**
      * ファイルからの学習データ読み込み

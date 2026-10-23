@@ -26,6 +26,12 @@ class MeltypeSession(
     private var activeReading: String = ""
     private var activeRaw: String = ""
 
+    /**
+     * 変換の世代番号。候補や入力バッファがユーザー操作で変わるたびに増やす。
+     * 遅れて届いた非同期の変換結果が、古い入力のものかどうかを見分けるために使う。
+     */
+    private var conversionGeneration = 0
+
     /** 現在の入力モード（HYBRID: 自動英日ハイブリッド / DIRECT: バニラ直接入力） */
     var currentInputMode: InputMode = MeltypeConfig.initialInputMode
         private set
@@ -209,21 +215,7 @@ class MeltypeSession(
                     '~', '～', '〜' -> "～"
                     else -> c.toString()
                 }
-                if (hasCandidates) {
-                    // 変換後（候補表示中）に打った記号は、選択中の候補を確定してから続けて入力する
-                    // （バッファに足すだけだと、確定する候補に含まれず消えてしまうため）
-                    commitCurrent(insertToChat)
-                    if (isComposing) {
-                        // 文節伸縮の残りがバッファに戻っている場合は、その末尾に記号を足す
-                        rawBuffer.append(punctuation)
-                        updatePreview()
-                    } else {
-                        insertToChat(punctuation)
-                    }
-                    return true
-                }
-                rawBuffer.append(punctuation)
-                updatePreview()
+                appendToCompositionOrInsert(punctuation, insertToChat)
                 return true
             }
 
@@ -253,6 +245,24 @@ class MeltypeSession(
         }
     }
 
+    /**
+     * 記号・空白を入力中の文に続けて足す（入力中でなければチャット欄へ直接挿入）
+     * 変換後（候補表示中）の場合は、選択中の候補を確定してから続けて入力する
+     * （バッファに足すだけだと、確定する候補に含まれず消えてしまうため）
+     */
+    private fun appendToCompositionOrInsert(text: String, insertToChat: (String) -> Unit) {
+        if (hasCandidates) {
+            commitCurrent(insertToChat)
+        }
+        if (isComposing) {
+            // 文節伸縮の残りがバッファに戻っている場合も、その末尾に足す
+            rawBuffer.append(text)
+            updatePreview()
+        } else {
+            insertToChat(text)
+        }
+    }
+
     /** 外部IME確定文字判定（ひらがな、カタカナ、漢字） */
     private fun isJapaneseChar(c: Char): Boolean {
         val code = c.code
@@ -273,12 +283,7 @@ class MeltypeSession(
             // 0. Shift + F12 による「～」記号の入力（ユーザー要望）
             val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
             if (shift && keyCode == GLFW.GLFW_KEY_F12) {
-                if (isComposing) {
-                    rawBuffer.append("～")
-                    updatePreview()
-                } else {
-                    insertToChat("～")
-                }
+                appendToCompositionOrInsert("～", insertToChat)
                 return true
             }
 
@@ -338,8 +343,7 @@ class MeltypeSession(
                     val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
                     if (shift) {
                         // Shift+Space: バッファ内に明示的に半角スペースを追加して文章継続
-                        rawBuffer.append(' ')
-                        updatePreview()
+                        appendToCompositionOrInsert(" ", insertToChat)
                         return true
                     }
 
@@ -500,6 +504,7 @@ class MeltypeSession(
         val kata = romajiDetector.toKatakana(kana)
         val modes = listOf(kana, kata, raw).distinct()
 
+        conversionGeneration++
         val curSelected = candidates.getOrNull(selectedCandidateIndex)
         val nextIdx = if (curSelected != null && modes.contains(curSelected)) {
             (modes.indexOf(curSelected) + 1) % modes.size
@@ -526,6 +531,7 @@ class MeltypeSession(
      * F6〜F10 による直接変換候補の即時適用
      */
     private fun applyDirectCandidate(text: String) {
+        conversionGeneration++
         val raw = rawBuffer.toString()
         val kana = romajiDetector.toKanaLenient(raw)
         val list = mutableListOf(text)
@@ -548,6 +554,7 @@ class MeltypeSession(
      * 入力プレビューの更新
      */
     private fun updatePreview() {
+        conversionGeneration++
         val text = rawBuffer.toString()
         if (text.isEmpty()) {
             previewKana = ""
@@ -595,6 +602,7 @@ class MeltypeSession(
 
         activeReading = activeKana
         activeRaw = activeRawPart
+        val generation = ++conversionGeneration
 
         val katakana = romajiDetector.toKatakana(activeKana)
         val list = mutableListOf<String>()
@@ -612,7 +620,9 @@ class MeltypeSession(
 
         converter.convertAsync(activeKana).thenAccept { resultList ->
             synchronized(lock) {
-                if (rawBuffer.length >= clauseManager.clauseLength && clauseManager.clauseLength > 0) {
+                if (generation == conversionGeneration &&
+                    rawBuffer.length >= clauseManager.clauseLength && clauseManager.clauseLength > 0
+                ) {
                     val ranked = learningStore.rankCandidates(activeKana, resultList)
                     val fullList = mutableListOf<String>()
                     fullList.addAll(ranked)
@@ -655,12 +665,15 @@ class MeltypeSession(
     private fun applyPlan(plan: ConversionPlan) {
         activeReading = plan.reading
         activeRaw = plan.raw
+        // 世代番号を増やしてから控える（即時に完了する結果は thenAccept が同期実行されるため）
+        val generation = ++conversionGeneration
         candidates = plan.immediate
         selectedCandidateIndex = 0
 
         plan.final.thenAccept { finalList ->
             synchronized(lock) {
-                if (rawBuffer.isNotEmpty()) {
+                // 依頼後に入力や候補が変わっていたら、古い結果は捨てる
+                if (generation == conversionGeneration && rawBuffer.isNotEmpty()) {
                     candidates = finalList
                     if (!plan.keepSelection || selectedCandidateIndex !in finalList.indices) {
                         selectedCandidateIndex = 0
@@ -757,6 +770,7 @@ class MeltypeSession(
     /** 入力状態をリセット（モードは維持） */
     fun reset() {
         synchronized(lock) {
+            conversionGeneration++
             rawBuffer.clear()
             clauseManager.reset()
             previewKana = ""

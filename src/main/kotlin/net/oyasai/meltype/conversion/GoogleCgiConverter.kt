@@ -11,7 +11,6 @@ import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
-import java.util.regex.Pattern
 
 /**
  * Google 日本語入力 CGI API を利用した高精度かな漢字変換エンジン
@@ -20,14 +19,6 @@ import java.util.regex.Pattern
 class GoogleCgiConverter(
     private val fallback: IConverter = LocalDictionaryConverter()
 ) : IConverter {
-
-    private companion object {
-        /** レスポンス内の1文節 ["読み", ["候補1", "候補2", ...]] を抜き出す（毎回コンパイルしないよう定数化） */
-        val SEGMENT_PATTERN: Pattern = Pattern.compile("\\[\\\"([^\\\"]+)\\\",\\s*\\[([^\\]]*)\\]\\]")
-
-        /** 文節内の候補1つ分 "候補" を抜き出す */
-        val CANDIDATE_PATTERN: Pattern = Pattern.compile("\\\"([^\\\"]*)\\\"")
-    }
 
     private val httpClient: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(1000))
@@ -101,27 +92,19 @@ class GoogleCgiConverter(
      * Google CGI レスポンス形式: [["ひらがな1", ["候補1", "候補2"]], ["ひらがな2", ["候補1", ...]], ...]
      * 単語単体だけでなく、助詞・助動詞を含む文章全体の複数文節を一括結合して高精度な文候補を生成
      */
-    private fun parseGoogleCgiResponse(json: String, original: String): List<String> {
+    internal fun parseGoogleCgiResponse(json: String, original: String): List<String> {
         val segments = mutableListOf<Segment>()
-        try {
-            // [["読み", ["候補1", "候補2", ...]], ...] の全文節を走査
-            val segmentMatcher = SEGMENT_PATTERN.matcher(json)
-            while (segmentMatcher.find()) {
-                val reading = segmentMatcher.group(1)
-                val candBlock = segmentMatcher.group(2)
+        // [["読み", ["候補1", "候補2", ...]], ...] の全文節を走査（読めない形式なら空のまま）
+        for (element in JsonArrayReader(json).readTopLevel().orEmpty()) {
+            val pair = element as? List<*> ?: continue
+            val reading = pair.getOrNull(0) as? String ?: continue
+            if (reading.isEmpty()) continue
+            val cands = (pair.getOrNull(1) as? List<*>).orEmpty().filterIsInstance<String>().toMutableList()
 
-                val cands = mutableListOf<String>()
-                val candMatcher = CANDIDATE_PATTERN.matcher(candBlock)
-                while (candMatcher.find()) {
-                    cands.add(candMatcher.group(1))
-                }
-
-                if (cands.isEmpty()) {
-                    cands.add(reading)
-                }
-                segments.add(Segment(reading, cands))
+            if (cands.isEmpty()) {
+                cands.add(reading)
             }
-        } catch (_: Exception) {
+            segments.add(Segment(reading, cands))
         }
 
         if (segments.isEmpty()) {
@@ -161,5 +144,94 @@ class GoogleCgiConverter(
         }
 
         return results.distinct()
+    }
+}
+
+/**
+ * Google CGI のレスポンス（文字列と配列だけからなる JSON）を、入れ子の List と String に読み込む小さな読み取り器。
+ * 候補に「"」「]」が含まれる場合や、\uXXXX などのエスケープにも対応する。
+ * 数値・null など文字列と配列以外の値は読み飛ばし、形式が壊れている場合は null を返す。
+ */
+private class JsonArrayReader(private val json: String) {
+    private var pos = 0
+
+    /** 最初の '[' から始まる配列を読む（前置きの文字があっても読めるよう、そこまでは読み飛ばす） */
+    fun readTopLevel(): List<Any>? = try {
+        pos = json.indexOf('[')
+        if (pos < 0) null else readArray()
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    private fun readArray(): List<Any> {
+        expect('[')
+        val items = mutableListOf<Any>()
+        skipWhitespace()
+        if (peek() == ']') {
+            pos++
+            return items
+        }
+        while (true) {
+            skipWhitespace()
+            readValue()?.let { items.add(it) }
+            skipWhitespace()
+            when (next()) {
+                ',' -> continue
+                ']' -> return items
+                else -> throw IllegalArgumentException("配列の区切りが不正")
+            }
+        }
+    }
+
+    private fun readValue(): Any? = when (peek()) {
+        '[' -> readArray()
+        '"' -> readString()
+        else -> {
+            // 数値・true/false/null などは読み飛ばす
+            val start = pos
+            while (pos < json.length && json[pos] != ',' && json[pos] != ']' && !json[pos].isWhitespace()) pos++
+            if (pos == start) throw IllegalArgumentException("値がない")
+            null
+        }
+    }
+
+    private fun readString(): String {
+        expect('"')
+        val sb = StringBuilder()
+        while (true) {
+            val c = next()
+            when (c) {
+                '"' -> return sb.toString()
+                '\\' -> when (val e = next()) {
+                    '"', '\\', '/' -> sb.append(e)
+                    'b' -> sb.append('\b')
+                    'f' -> sb.append('\u000C')
+                    'n' -> sb.append('\n')
+                    'r' -> sb.append('\r')
+                    't' -> sb.append('\t')
+                    'u' -> {
+                        if (pos + 4 > json.length) throw IllegalArgumentException("\\u エスケープが途中で終わっている")
+                        val code = json.substring(pos, pos + 4).toIntOrNull(16)
+                            ?: throw IllegalArgumentException("\\u エスケープが不正")
+                        sb.append(code.toChar())
+                        pos += 4
+                    }
+                    else -> throw IllegalArgumentException("不明なエスケープ")
+                }
+                else -> sb.append(c)
+            }
+        }
+    }
+
+    private fun skipWhitespace() {
+        while (pos < json.length && json[pos].isWhitespace()) pos++
+    }
+
+    private fun peek(): Char = if (pos < json.length) json[pos] else throw IllegalArgumentException("途中で終わっている")
+
+    private fun next(): Char = peek().also { pos++ }
+
+    private fun expect(c: Char) {
+        if (next() != c) throw IllegalArgumentException("'$c' が必要")
     }
 }
