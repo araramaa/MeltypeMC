@@ -53,9 +53,11 @@ class ConversionPlanner(
     }
 
     /** 単一単語（英語寄りなら英語を第1候補、日本語寄りなら学習・かな・カタカナ・生英字の順） */
-    private fun planSingleWord(raw: String, text: String): ConversionPlan {
+    private fun planSingleWord(raw: String, previewText: String): ConversionPlan {
+        // 変換するときは、語尾の n を「ん」にする（例: harowin -> はろうぃん）
+        val text = previewText.withFinalN()
         val isEnglishDominant = scoreEngine.isEnglishInput(raw)
-        val initialKana = romajiDetector.toKanaLenient(raw)
+        val initialKana = romajiDetector.toKanaFinal(raw)
         val initialKatakana = romajiDetector.toKatakana(initialKana)
         val kana = initialKana.ifEmpty { raw }
         val katakana = initialKatakana.takeIf { it.isNotEmpty() && it != initialKana }

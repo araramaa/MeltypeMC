@@ -74,6 +74,17 @@ class RomajiDetector {
             "rya" to "りゃ", "ryu" to "りゅ", "ryo" to "りょ",
             // わ行
             "wa" to "わ", "wo" to "を", "nn" to "ん",
+            "wi" to "うぃ", "wu" to "う", // "we" は英単語 we と衝突するため登録しない（whe で入力）
+            "wha" to "うぁ", "whi" to "うぃ", "whu" to "う", "whe" to "うぇ", "who" to "うぉ",
+            // や行・拗音の追加（MS-IME 等と同じ打ち方）
+            "ye" to "いぇ",
+            "zya" to "じゃ", "zyu" to "じゅ", "zye" to "じぇ", "zyo" to "じょ",
+            "cya" to "ちゃ", "cyu" to "ちゅ", "cye" to "ちぇ", "cyo" to "ちょ",
+            "tsa" to "つぁ", "tsi" to "つぃ", "tse" to "つぇ", "tso" to "つぉ",
+            "tha" to "てゃ", "thu" to "てゅ", "the" to "てぇ", "tho" to "てょ",
+            "dha" to "でゃ", "dhu" to "でゅ", "dhe" to "でぇ", "dho" to "でょ",
+            "kwa" to "くぁ", "kwi" to "くぃ", "kwu" to "く", "kwe" to "くぇ", "kwo" to "くぉ",
+            "gwa" to "ぐぁ", "gwi" to "ぐぃ", "gwu" to "ぐ", "gwe" to "ぐぇ", "gwo" to "ぐぉ",
             // 促音・小文字
             "la" to "ぁ", "li" to "ぃ", "lu" to "ぅ", "le" to "ぇ", "lo" to "ぉ",
             "xa" to "ぁ", "xi" to "ぃ", "xu" to "ぅ", "xe" to "ぇ", "xo" to "ぉ",
@@ -273,6 +284,12 @@ class RomajiDetector {
     }
 
     /**
+     * 変換・確定の直前に使う、語尾の `n` を「ん」にしたかな変換
+     * （入力途中のプレビューは [toKanaLenient] のまま。`n` は次の `na` などになるかもしれないため）
+     */
+    fun toKanaFinal(letters: String): String = toKanaLenient(letters).withFinalN()
+
+    /**
      * ひらがな文字列をカタカナに変換する
      */
     fun toKatakana(hiragana: String): String {
@@ -296,4 +313,15 @@ class RomajiDetector {
             }
         }.joinToString("")
     }
+}
+
+/**
+ * 語尾に残った半角の `n`（前が英字でないもの）を「ん」にする
+ * 例: "はろうぃn" -> "はろうぃん"、"n" -> "ん"。英語の語尾（"pen" の n など、前が英字）は変えない
+ */
+internal fun String.withFinalN(): String {
+    if (!endsWith('n')) return this
+    val prev = if (length >= 2) this[length - 2] else null
+    if (prev != null && (prev in 'a'..'z' || prev in 'A'..'Z')) return this
+    return dropLast(1) + "ん"
 }

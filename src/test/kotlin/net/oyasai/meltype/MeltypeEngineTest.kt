@@ -1228,6 +1228,67 @@ class MeltypeEngineTest {
     }
 
     /**
+     * 「ハロウィン」など、うぃ・てぃ・つぁ行のローマ字入力ができることの検証
+     */
+    @Test
+    fun testExtendedRomajiForLoanwords() {
+        // 語尾の n は、確定・変換のときに「ん」になる（入力途中のプレビューは n のまま）
+        assertEquals("はろうぃん", romajiDetector.toKanaFinal("harowin"))
+        assertEquals("はろうぃn", romajiDetector.toKanaLenient("harowin"))
+        assertEquals("ハロウィン", romajiDetector.toKatakana(romajiDetector.toKanaFinal("harowin")))
+        assertEquals("はろうぃん", romajiDetector.toKanaFinal("harowinn"))
+        assertEquals("はろうぃん", romajiDetector.toKanaFinal("harouxin"))
+        assertEquals("ほん", romajiDetector.toKanaFinal("hon"))
+        assertEquals("つぁ", romajiDetector.toKanaLenient("tsa"))
+        assertEquals("じゃ", romajiDetector.toKanaLenient("zya"))
+        assertEquals("ちゃ", romajiDetector.toKanaLenient("cya"))
+        assertEquals("でぃ", romajiDetector.toKanaLenient("dhi"))
+        // 日本語として入力できる（英語に誤判定されない）
+        assertFalse(scoreEngine.isEnglishInput("harowin"))
+        // 英単語 "we" は日本語（うぇ）にならない
+        assertTrue(scoreEngine.isEnglishInput("we") || romajiDetector.toKanaLenient("we") != "うぇ")
+    }
+
+    /**
+     * 語尾に n を1つだけ打った語（例: harowin）を、Space で変換しても Enter で確定しても「ん」になることの検証
+     */
+    @Test
+    fun testTrailingNBecomesNWhenConverting() {
+        val stub = object : net.oyasai.meltype.conversion.IConverter {
+            override fun convertAsync(reading: String) =
+                java.util.concurrent.CompletableFuture.completedFuture(listOf("漢[$reading]"))
+        }
+        fun newSession(): MeltypeSession {
+            val s = MeltypeSession(
+                romajiDetector = romajiDetector,
+                englishDetector = englishDetector,
+                scoreEngine = scoreEngine,
+                slashCommandGate = slashGate,
+                converter = stub,
+                learningStore = net.oyasai.meltype.conversion.ConversionLearningStore(
+                    java.io.File.createTempFile("meltype_n", ".txt").also { it.deleteOnExit() })
+            )
+            s.toggleInputMode() // HYBRID
+            return s
+        }
+
+        // Space で変換 → 候補の読みが「はろうぃん」になる
+        val committedA = mutableListOf<String>()
+        val a = newSession()
+        for (c in "harowin") a.onCharTyped(c, "", { committedA.add(it) })
+        a.onKeyPressed(GLFW.GLFW_KEY_SPACE, 0, 0, { committedA.add(it) })
+        assertTrue(a.candidates.any { it.contains("はろうぃん") }, "候補: ${a.candidates}")
+        assertTrue(a.candidates.none { it.contains("はろうぃn") }, "候補: ${a.candidates}")
+
+        // 変換せず Enter で確定 → 「はろうぃん」
+        val committedB = mutableListOf<String>()
+        val b = newSession()
+        for (c in "harowin") b.onCharTyped(c, "", { committedB.add(it) })
+        b.onKeyPressed(GLFW.GLFW_KEY_ENTER, 0, 0, { committedB.add(it) })
+        assertEquals(listOf("はろうぃん"), committedB)
+    }
+
+    /**
      * 「Google変換を使わない」設定のとき、外部通信せずローカル変換のみが使われることの検証
      */
     @Test

@@ -477,7 +477,7 @@ class MeltypeSession(
                 // F6〜F10: 無変換ショートカット（最初に入力した文字そのままの形式変換）
                 GLFW.GLFW_KEY_F6, GLFW.GLFW_KEY_F7, GLFW.GLFW_KEY_F9, GLFW.GLFW_KEY_F10 -> {
                     val raw = rawBuffer.toString()
-                    val kana = romajiDetector.toKanaLenient(raw)
+                    val kana = romajiDetector.toKanaFinal(raw)
                     applyDirectCandidate(
                         when (keyCode) {
                             GLFW.GLFW_KEY_F6 -> kana                                 // ひらがな
@@ -500,7 +500,7 @@ class MeltypeSession(
     private fun toggleMuhenkanCandidates() {
         if (!isComposing) return
         val raw = rawBuffer.toString()
-        val kana = romajiDetector.toKanaLenient(raw)
+        val kana = romajiDetector.toKanaFinal(raw)
         val kata = romajiDetector.toKatakana(kana)
         val modes = listOf(kana, kata, raw).distinct()
 
@@ -533,7 +533,7 @@ class MeltypeSession(
     private fun applyDirectCandidate(text: String) {
         conversionGeneration++
         val raw = rawBuffer.toString()
-        val kana = romajiDetector.toKanaLenient(raw)
+        val kana = romajiDetector.toKanaFinal(raw)
         val list = mutableListOf(text)
         list.addIfMissing(raw)
         list.addIfMissing(kana)
@@ -598,7 +598,7 @@ class MeltypeSession(
         }
 
         val (activeRawPart, remainderRawPart) = clauseManager.split(rawBuffer.toString())
-        val activeKana = romajiDetector.toKanaLenient(activeRawPart)
+        val activeKana = romajiDetector.toKanaFinal(activeRawPart)
 
         activeReading = activeKana
         activeRaw = activeRawPart
@@ -710,7 +710,8 @@ class MeltypeSession(
                             if (scoreEngine.isEnglishInput(rawStr)) {
                                 rawStr
                             } else {
-                                previewKana
+                                // 変換せずに Enter で確定するときも、語尾の n は「ん」にする
+                                previewKana.withFinalN()
                             }
                         }
                     }
