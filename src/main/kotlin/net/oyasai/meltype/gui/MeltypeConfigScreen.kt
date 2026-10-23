@@ -23,6 +23,9 @@ class MeltypeConfigScreen(
     private var listeningForKey = false
     private var rejectedReason: String? = null
 
+    /** 切り替えキーの案内を表示する Y 座標（ボタン一覧のすぐ下。init で決まる） */
+    private var keyHintY = 0
+
     companion object {
         private const val BUTTON_WIDTH = 280
         private const val BUTTON_HEIGHT = 20
@@ -136,6 +139,9 @@ class MeltypeConfigScreen(
                 onClose()
             }.bounds(centerX + 3, currentY, halfWidth, BUTTON_HEIGHT).build()
         )
+
+        // 切り替えキーの案内は、メニュー（ボタン一覧）のすぐ下に表示する
+        keyHintY = currentY + BUTTON_HEIGHT + 6
     }
 
     private fun getCandidatesButtonText(): Component {
@@ -256,10 +262,10 @@ class MeltypeConfigScreen(
         val subtitleWidth = font.width(subtitle)
         extractor.textRenderer().accept((width - subtitleWidth) / 2, 30, subtitle)
 
-        // 画面下部ヒント（切り替えキーの案内）
+        // 切り替えキーの案内（メニューのすぐ下）
         val keyHint = Component.literal("モード切り替え: Ctrl+Space / 半角全角 / 変換 / 無変換キー").withColor(0xFFAAAAAA.toInt())
         val keyHintWidth = font.width(keyHint)
-        extractor.textRenderer().accept((width - keyHintWidth) / 2, height - 32, keyHint)
+        extractor.textRenderer().accept((width - keyHintWidth) / 2, keyHintY, keyHint)
 
         // 画面下部ヒント
         val hint = Component.literal("※ チャット欄の [あ/A] アイコンを右クリックでいつでも開けます").withColor(0xFF888888.toInt())
