@@ -256,6 +256,11 @@ class MeltypeConfigScreen(
         val subtitleWidth = font.width(subtitle)
         extractor.textRenderer().accept((width - subtitleWidth) / 2, 30, subtitle)
 
+        // 画面下部ヒント（切り替えキーの案内）
+        val keyHint = Component.literal("モード切り替え: Ctrl+Space / 半角全角 / 変換 / 無変換キー").withColor(0xFFAAAAAA.toInt())
+        val keyHintWidth = font.width(keyHint)
+        extractor.textRenderer().accept((width - keyHintWidth) / 2, height - 32, keyHint)
+
         // 画面下部ヒント
         val hint = Component.literal("※ チャット欄の [あ/A] アイコンを右クリックでいつでも開けます").withColor(0xFF888888.toInt())
         val hintWidth = font.width(hint)
