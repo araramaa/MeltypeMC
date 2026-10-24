@@ -69,6 +69,9 @@ class MeltypeSession(
     /** 半角/全角キー押下直後のバッククォート/チルダ文字入力をブロックするフラグ */
     private var skipNextGraveChar: Boolean = false
 
+    /** Ctrl+Space で切り替えた直後に、続けて届く空白文字（U+0020）を入力させないためのフラグ */
+    private var skipNextSpaceChar: Boolean = false
+
     /** 現在IME入力・変換中かどうか */
     val isComposing: Boolean get() = synchronized(lock) { rawBuffer.isNotEmpty() }
 
@@ -154,6 +157,12 @@ class MeltypeSession(
         if (!MeltypeConfig.enabled) return false
 
         synchronized(lock) {
+            // Ctrl+Space で切り替えた直後に届く空白文字は、入力せずに捨てる（モードに関係なく）
+            if (skipNextSpaceChar) {
+                skipNextSpaceChar = false
+                if (c == ' ') return true
+            }
+
             // 半角/全角キー押下直後のバッククォート文字等の誤入力を抑止（~ は記号として有効なため除外）
             if (skipNextGraveChar) {
                 skipNextGraveChar = false
@@ -283,6 +292,9 @@ class MeltypeSession(
         if (!MeltypeConfig.enabled) return false
 
         synchronized(lock) {
+            // 新しいキーが押されたら、前の Ctrl+Space の空白捨てを解除する（文字入力が届かなかったときに、次の空白を捨てないため）
+            skipNextSpaceChar = false
+
             // モードの切り替えや記号のショートカットは、どのモード・状態でも最優先で処理する
             if (handleGlobalKeys(keyCode, scanCode, modifiers, insertToChat)) return true
 
@@ -313,6 +325,7 @@ class MeltypeSession(
 
             // 設定画面で登録した任意の切り替えキー
             MeltypeConfig.isToggleKey(keyCode, modifiers) -> {
+                skipNextSpaceChar = keyCode == GLFW.GLFW_KEY_SPACE // 切り替えキーが Space を含むとき、空白が入らないようにする
                 toggleInputMode(insertToChat)
                 true
             }
@@ -326,6 +339,8 @@ class MeltypeSession(
 
             // Ctrl + Space
             ctrl && keyCode == GLFW.GLFW_KEY_SPACE -> {
+                // Ctrl+Space では、続けて空白の文字入力が届くので、それを捨てる
+                skipNextSpaceChar = true
                 toggleInputMode(insertToChat)
                 true
             }

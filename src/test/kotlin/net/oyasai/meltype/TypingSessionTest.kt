@@ -5,8 +5,47 @@ import net.oyasai.meltype.engine.*
 import org.lwjgl.glfw.GLFW
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+
 /** 入力の流れ（打つ → 変換 → 確定）とモード切り替えのテスト */
 class TypingSessionTest : MeltypeTestBase() {
+
+    /**
+     * Ctrl+Space でモードを切り替えたとき、続けて届く空白の文字入力が捨てられる
+     * （切り替えのたびに、チャット欄へ空白が入ってしまわない）ことの検証
+     */
+    @Test
+    fun testCtrlSpaceToggleDoesNotInsertSpace() {
+        val committed = mutableListOf<String>()
+        val insert: (String) -> Unit = { committed.add(it) }
+        val session = MeltypeSession(
+            romajiDetector = romajiDetector,
+            englishDetector = englishDetector,
+            scoreEngine = scoreEngine,
+            slashCommandGate = slashGate,
+            learningStore = newTempLearningStore()
+        )
+        assertEquals(InputMode.DIRECT, session.currentInputMode)
+
+        // DIRECT → HYBRID: キー入力を消費し、続く空白の文字入力も捨てる
+        assertTrue(session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 57, GLFW.GLFW_MOD_CONTROL, insert))
+        assertEquals(InputMode.HYBRID, session.currentInputMode)
+        assertTrue(session.onCharTyped(' ', "", insert), "切り替え直後の空白は捨てられること")
+
+        // HYBRID → DIRECT（DIRECT でも空白は捨てられる）
+        assertTrue(session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 57, GLFW.GLFW_MOD_CONTROL, insert))
+        assertEquals(InputMode.DIRECT, session.currentInputMode)
+        assertTrue(session.onCharTyped(' ', "", insert), "DIRECT でも切り替え直後の空白は捨てられること")
+
+        // そのあとの通常の空白は、これまでどおり入力できる（バニラに任せる = false）
+        assertFalse(session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 57, 0, insert))
+        assertFalse(session.onCharTyped(' ', "", insert), "通常の空白は捨てられないこと")
+
+        // 切り替えのあとに空白の文字入力が届かなかった場合、次の通常の空白を捨てないこと
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 57, GLFW.GLFW_MOD_CONTROL, insert)
+        session.onKeyPressed(GLFW.GLFW_KEY_SPACE, 57, 0, insert) // 新しいキー押下で、捨てる設定が解除される
+        assertFalse(session.onCharTyped(' ', "", insert), "解除後の空白は捨てられないこと")
+        assertTrue(committed.isEmpty())
+    }
 
     /**
      * ユーザー指定の重要要件:
