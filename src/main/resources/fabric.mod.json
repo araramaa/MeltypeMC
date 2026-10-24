@@ -21,6 +21,12 @@
         "adapter": "kotlin",
         "value": "net.oyasai.meltype.MeltypeClient"
       }
+    ],
+    "modmenu": [
+      {
+        "adapter": "kotlin",
+        "value": "net.oyasai.meltype.MeltypeModMenuIntegration"
+      }
     ]
   },
   "depends": {
@@ -29,13 +35,5 @@
     "java": ">=25",
     "fabric-language-kotlin": "*",
     "fabric-screen-api-v1": "*"
-  },
-  "custom": {
-    "modmenu": {
-      "links": {
-        "modmenu.source": "https://github.com/araramaa/MeltypeMC",
-        "modmenu.issues": "https://github.com/araramaa/MeltypeMC/issues"
-      }
-    }
   }
 }

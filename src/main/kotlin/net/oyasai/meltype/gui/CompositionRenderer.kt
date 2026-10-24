@@ -6,9 +6,6 @@ import net.minecraft.client.gui.components.AbstractWidget
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.screens.ChatScreen
 import net.minecraft.client.gui.screens.Screen
-import net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen
-import net.minecraft.client.gui.screens.inventory.AnvilScreen
-import net.minecraft.client.gui.screens.inventory.BookEditScreen
 import net.minecraft.network.chat.Component
 import net.oyasai.meltype.config.MeltypeConfig
 import net.oyasai.meltype.engine.InputMode
@@ -19,16 +16,14 @@ import java.lang.reflect.Field
  * チャット入力欄および各種テキスト入力画面向けのUIレンダラー。
  *
  * 主な責務:
- * 1. チャット入力欄先頭のモード切替アイコンボタン（[ A ] / [あ/A]）の描画とクリック判定
+ * 1. モード切替アイコンボタン（[ A ] / [あ/A]）の描画（位置とクリック判定は IndicatorLayout）
  * 2. 入力欄 EditBox の自動オフセット（ボタンと入力文字の重なり防止）
  * 3. 変換候補リストウィンドウの描画（他MODウィジェットとの衝突回避付き）
  * 4. 入力中ひらがなプレビュー（下線付き）の描画
  */
 object CompositionRenderer {
 
-    // --- UI レイアウト寸法定数 ---
-    const val BUTTON_WIDTH = 26
-    const val BUTTON_HEIGHT = 12
+    // --- UI レイアウト寸法定数（アイコンの大きさは IndicatorLayout） ---
     private const val CANDIDATE_BOX_HEIGHT = 14
     private const val TOOLTIP_HEIGHT = 14
 
@@ -58,62 +53,6 @@ object CompositionRenderer {
     private var cachedChatInputField: Field? = null
 
     /**
-     * 各画面におけるモード切替ボタンの矩形領域 [X, Y, Width, Height] を算出
-     */
-    fun getButtonBounds(screen: Screen): IntArray {
-        val screenWidth = screen.width
-        val screenHeight = screen.height
-        val className = screen.javaClass.name
-
-        return when {
-            // チャット画面: 入力欄の先頭（左端 x = 2, y = screenHeight - 14）
-            screen is ChatScreen || className.contains("Chat") -> {
-                intArrayOf(2, screenHeight - 14, BUTTON_WIDTH, BUTTON_HEIGHT)
-            }
-            // 金床画面
-            screen is AnvilScreen || className.contains("Anvil") -> {
-                val bx = (screenWidth - 176) / 2 + 58
-                val by = (screenHeight - 166) / 2 + 38
-                intArrayOf(bx, by, BUTTON_WIDTH, BUTTON_HEIGHT)
-            }
-            // 看板編集画面
-            // 「完了」ボタンの左隣（ボタンが見つからない場合はバニラ座標で代用）
-            screen is AbstractSignEditScreen || className.contains("Sign") -> {
-                leftOfBottomButton(screen)
-                    ?: intArrayOf((screenWidth / 2) - 100 - BUTTON_WIDTH - 4, screenHeight / 4 + 124, BUTTON_WIDTH, BUTTON_HEIGHT)
-            }
-            // 本編集画面: 「署名」ボタンの左隣（ボタンが見つからない場合はバニラ座標で代用）
-            screen is BookEditScreen || className.contains("Book") -> {
-                leftOfBottomButton(screen)
-                    ?: intArrayOf((screenWidth / 2) - 100 - BUTTON_WIDTH - 4, 200, BUTTON_WIDTH, BUTTON_HEIGHT)
-            }
-            // フォールバック
-            else -> {
-                intArrayOf(2, screenHeight - 14, BUTTON_WIDTH, BUTTON_HEIGHT)
-            }
-        }
-    }
-
-    /**
-     * 画面最下段のボタン列のうち最も左のボタン（看板の「完了」/ 本の「署名」）の左隣の矩形を算出
-     */
-    private fun leftOfBottomButton(screen: Screen): IntArray? {
-        return try {
-            val buttons = screen.children().filterIsInstance<AbstractWidget>().filter { it.visible }
-            val bottomY = buttons.maxOfOrNull { it.y } ?: return null
-            val target = buttons.filter { it.y == bottomY }.minByOrNull { it.x } ?: return null
-            intArrayOf(
-                maxOf(2, target.x - BUTTON_WIDTH - 4),
-                target.y + (target.height - BUTTON_HEIGHT) / 2,
-                BUTTON_WIDTH,
-                BUTTON_HEIGHT
-            )
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
-    /**
      * チャット入力欄（EditBox）の開始位置をボタンの右側へオフセット
      * 入力された文字やカーソルがボタンと絶対に重ならないように保護します。
      */
@@ -128,7 +67,7 @@ object CompositionRenderer {
                 cachedChatInputField = field
             }
             val editBox = field?.get(screen) as? EditBox ?: return
-            val targetX = 2 + BUTTON_WIDTH + 2
+            val targetX = 2 + IndicatorLayout.BUTTON_WIDTH + 2
             val targetWidth = screen.width - targetX - 2
             if (editBox.x != targetX || editBox.width != targetWidth) {
                 editBox.x = targetX
@@ -204,13 +143,13 @@ object CompositionRenderer {
     private fun renderModeButton(screen: Screen, extractor: GuiGraphicsExtractor, session: MeltypeSession, mouseX: Int, mouseY: Int) {
         val client = Minecraft.getInstance()
         val font = client.font
-        val bounds = getButtonBounds(screen)
-        val btnX = bounds[0]
-        val btnY = bounds[1]
-        val btnW = bounds[2]
-        val btnH = bounds[3]
+        val bounds = IndicatorLayout.boundsFor(screen)
+        val btnX = bounds.x
+        val btnY = bounds.y
+        val btnW = bounds.width
+        val btnH = bounds.height
 
-        val isHovered = mouseX in btnX..(btnX + btnW) && mouseY in btnY..(btnY + btnH)
+        val isHovered = bounds.contains(mouseX.toDouble(), mouseY.toDouble())
         val mode = session.currentInputMode
         val iconText = mode.iconText
 
@@ -324,25 +263,5 @@ object CompositionRenderer {
         extractor.textRenderer().accept(safeX + 4, previewY, Component.literal(previewText).withColor(COLOR_ACCENT_ORANGE))
         // 下線
         extractor.fill(safeX + 4, previewY + 10, safeX + 4 + textWidth, previewY + 11, COLOR_ACCENT_ORANGE)
-    }
-
-    /**
-     * マウスクリック位置がモード切替ボタン上にあるかを安全に判定
-     */
-    fun isIndicatorClicked(screen: Screen, mouseX: Double, mouseY: Double): Boolean {
-        if (!MeltypeConfig.showModeIndicator) return false
-        try {
-            val bounds = getButtonBounds(screen)
-            val btnX = bounds[0]
-            val btnY = bounds[1]
-            val btnW = bounds[2]
-            val btnH = bounds[3]
-
-            // 快適なクリックのため2pxのマージンを付与
-            return mouseX >= (btnX - 2) && mouseX <= (btnX + btnW + 2) &&
-                   mouseY >= (btnY - 2) && mouseY <= (btnY + btnH + 2)
-        } catch (_: Throwable) {
-            return false
-        }
     }
 }

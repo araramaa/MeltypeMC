@@ -18,6 +18,7 @@ import net.oyasai.meltype.engine.RomajiDetector
 import net.oyasai.meltype.engine.ScoreEngine
 import net.oyasai.meltype.engine.SlashCommandGate
 import net.oyasai.meltype.gui.CompositionRenderer
+import net.oyasai.meltype.gui.IndicatorLayout
 import org.slf4j.LoggerFactory
 
 /**
@@ -95,7 +96,7 @@ object MeltypeClient : ClientModInitializer {
         // マウスクリックイベント（インジケータークリックでの入力モード切り替え / 右クリックで設定画面）
         ScreenMouseEvents.allowMouseClick(screen).register(ScreenMouseEvents.AllowMouseClick { s, mouseButtonEvent ->
             try {
-                if (CompositionRenderer.isIndicatorClicked(s, mouseButtonEvent.x(), mouseButtonEvent.y())) {
+                if (IndicatorLayout.isClicked(s, mouseButtonEvent.x(), mouseButtonEvent.y())) {
                     if (mouseButtonEvent.button() == 0) { // 左クリック: 入力モード切替
                         session.toggleInputMode { commitText ->
                             insertTextToScreen(s, commitText)

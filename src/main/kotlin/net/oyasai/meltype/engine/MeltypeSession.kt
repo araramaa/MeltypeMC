@@ -206,15 +206,8 @@ class MeltypeSession(
             }
 
             // 4. 日本語入力中の句読点・記号（確定させずにバッファに保持して文の入力を継続）
-            if (isComposing && (c == ',' || c == '.' || c == '?' || c == '!' || c == '~' || c == '～' || c == '〜')) {
-                val punctuation = when (c) {
-                    ',' -> "、"
-                    '.' -> "。"
-                    '?' -> "？"
-                    '!' -> "！"
-                    '~', '～', '〜' -> "～"
-                    else -> c.toString()
-                }
+            val punctuation = if (isComposing) toFullWidthPunctuation(c) else null
+            if (punctuation != null) {
                 appendToCompositionOrInsert(punctuation, insertToChat)
                 return true
             }
@@ -263,6 +256,16 @@ class MeltypeSession(
         }
     }
 
+    /** 入力中に打った半角の句読点・記号を、日本語の記号にする（対象外の文字は null） */
+    private fun toFullWidthPunctuation(c: Char): String? = when (c) {
+        ',' -> "、"
+        '.' -> "。"
+        '?' -> "？"
+        '!' -> "！"
+        '~', '～', '〜' -> "～"
+        else -> null
+    }
+
     /** 外部IME確定文字判定（ひらがな、カタカナ、漢字） */
     private fun isJapaneseChar(c: Char): Boolean {
         val code = c.code
@@ -280,218 +283,204 @@ class MeltypeSession(
         if (!MeltypeConfig.enabled) return false
 
         synchronized(lock) {
-            // 0. Shift + F12 による「～」記号の入力（ユーザー要望）
-            val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
-            if (shift && keyCode == GLFW.GLFW_KEY_F12) {
-                appendToCompositionOrInsert("～", insertToChat)
-                return true
-            }
-
-            // 0.5 設定画面で登録した任意の切り替えキーによるモード切り替え
-            if (MeltypeConfig.isToggleKey(keyCode, modifiers)) {
-                toggleInputMode(insertToChat)
-                return true
-            }
-
-            // 1. 半角/全角キーによるモード切り替え（ハイブリッド ↔ 直接入力）
-            // Shift等の修飾キーが押されていない単独キー押下時のみモード切り替えを行う
-            val noModifiers = (modifiers and (GLFW.GLFW_MOD_SHIFT or GLFW.GLFW_MOD_CONTROL or GLFW.GLFW_MOD_ALT)) == 0
-            if (noModifiers && isHankakuZenkakuKey(keyCode, scanCode)) {
-                skipNextGraveChar = true
-                toggleInputMode(insertToChat)
-                return true
-            }
-
-            // Ctrl+Space によるモード切り替え
-            val ctrl = (modifiers and GLFW.GLFW_MOD_CONTROL) != 0
-            if (ctrl && keyCode == GLFW.GLFW_KEY_SPACE) {
-                toggleInputMode(insertToChat)
-                return true
-            }
-
-            // 2. 変換キー -> HYBRIDモード
-            if (isHenkanKey(scanCode)) {
-                setInputMode(InputMode.HYBRID, insertToChat)
-                return true
-            }
-
-            // 3. 無変換キー: 入力中は「ひらがな -> カタカナ -> 最初に入力した英字」を順にトグル選択！
-            if (isMuhenkanKey(scanCode)) {
-                if (isComposing) {
-                    toggleMuhenkanCandidates()
-                    return true
-                }
-                setInputMode(InputMode.DIRECT, insertToChat)
-                return true
-            }
+            // モードの切り替えや記号のショートカットは、どのモード・状態でも最優先で処理する
+            if (handleGlobalKeys(keyCode, scanCode, modifiers, insertToChat)) return true
 
             // 直接入力モード時は、その他のすべてのキーをバニラにパススルー
-            if (currentInputMode == InputMode.DIRECT) {
-                return false
-            }
+            if (currentInputMode == InputMode.DIRECT) return false
 
-            // コマンドモード中の場合、IMEキー処理はスキップ
-            if (slashCommandGate.isCommandMode && !isComposing) {
-                return false
-            }
-
+            // コマンドモード中、または入力中でなければ、IMEキー処理はスキップ
+            if (slashCommandGate.isCommandMode && !isComposing) return false
             if (!isComposing) return false
 
-            when (keyCode) {
-                // Space: ハイブリッド入力の最重要キー
-                GLFW.GLFW_KEY_SPACE -> {
-                    val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
-                    if (shift) {
-                        // Shift+Space: バッファ内に明示的に半角スペースを追加して文章継続
-                        appendToCompositionOrInsert(" ", insertToChat)
-                        return true
-                    }
+            return handleCompositionKey(keyCode, modifiers, insertToChat)
+        }
+    }
 
-                    val currentRaw = rawBuffer.toString()
+    /**
+     * 入力モードの切り替えキーと、「～」のショートカットの処理（入力中かどうかに関係なく働く）
+     */
+    private fun handleGlobalKeys(keyCode: Int, scanCode: Int, modifiers: Int, insertToChat: (String) -> Unit): Boolean {
+        val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
+        val ctrl = (modifiers and GLFW.GLFW_MOD_CONTROL) != 0
 
-                    // 既に変換候補ウィンドウが出ている場合は次の候補へ
-                    if (hasCandidates) {
-                        val count = candidates.size
-                        if (count > 0) {
-                            selectedCandidateIndex = (selectedCandidateIndex + 1) % count
-                        }
-                        return true
-                    }
-
-                    // ★英単語＋助詞/日本語の複合語・ハイブリッド文判定（例: "kyouhadiamondwotoriniikou", "diamondwosagasou"）
-                    val multiCompound = compoundWordSplitter.splitSentence(currentRaw)
-                    if (multiCompound != null) {
-                        applyPlan(conversionPlanner.planMultiCompound(multiCompound, currentRaw))
-                        return true
-                    }
-
-                    val compound = compoundWordSplitter.split(currentRaw)
-                    if (compound != null) {
-                        applyPlan(conversionPlanner.planCompound(compound, currentRaw))
-                        return true
-                    }
-
-                    // ★英語判定（例: "diamond", "apple", "Modrinth", "curseforge" 等）
-                    // 漢字変換候補ウィンドウは出さず、英単語＋半角スペースとして即座に確定！
-                    // ※日本語日常語（sore, are, dare, sake 等）は日本語変換候補を表示！
-                    if (scoreEngine.isEnglishInput(currentRaw)) {
-                        insertToChat("$currentRaw ")
-                        reset()
-                        return true
-                    }
-
-                    // ★日本語判定（例: "kyouha", "sagasou", "sore", "douro" 等）
-                    // 即座にかな漢字変換をトリガーし、第一候補を表示
-                    triggerConversion()
-                    return true
-                }
-
-                // Enter: 確定 (Shift+Enter なら最初に入力した文字そのまま即座に確定挿入！)
-                GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> {
-                    val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
-                    if (shift && isComposing) {
-                        flushAsIs(insertToChat)
-                        return true
-                    }
-                    commitCurrent(insertToChat)
-                    return true
-                }
-
-                // Backspace: 1文字削除
-                GLFW.GLFW_KEY_BACKSPACE -> {
-                    if (hasCandidates || clauseManager.clauseLength > 0) {
-                        candidates = emptyList()
-                        selectedCandidateIndex = 0
-                        clauseManager.reset()
-                        updatePreview()
-                        return true
-                    }
-                    if (rawBuffer.isNotEmpty()) {
-                        clauseManager.reset()
-                        rawBuffer.deleteCharAt(rawBuffer.length - 1)
-                        updatePreview()
-                        return true
-                    }
-                    return false
-                }
-
-                // Escape: 変換キャンセル
-                GLFW.GLFW_KEY_ESCAPE -> {
-                    reset()
-                    return true
-                }
-
-                // Tab / Shift+Tab: 候補送り・戻し（未表示時は候補表示）
-                GLFW.GLFW_KEY_TAB -> {
-                    if (!hasCandidates && isComposing) {
-                        triggerConversion()
-                        return true
-                    }
-                    if (hasCandidates) {
-                        val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
-                        moveSelection(if (shift) -1 else 1)
-                        return true
-                    }
-                }
-
-                // 左右矢印キー: Shift+左右で文節伸縮（1文字ずつ選択・変換）、通常は候補選択
-                GLFW.GLFW_KEY_RIGHT -> {
-                    val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
-                    if (shift && isComposing) {
-                        expandClause()
-                        return true
-                    }
-                    if (moveSelection(1)) return true
-                }
-                GLFW.GLFW_KEY_LEFT -> {
-                    val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
-                    if (shift && isComposing) {
-                        shrinkClause()
-                        return true
-                    }
-                    if (moveSelection(-1)) return true
-                }
-                GLFW.GLFW_KEY_DOWN -> {
-                    if (!hasCandidates && isComposing) {
-                        triggerConversion()
-                        return true
-                    }
-                    if (moveSelection(1)) return true
-                }
-                GLFW.GLFW_KEY_UP -> {
-                    if (moveSelection(-1)) return true
-                }
-
-                // 1〜9の数字キー (メインキー & テンキー): 候補のダイレクト選択
-                in GLFW.GLFW_KEY_1..GLFW.GLFW_KEY_9 -> {
-                    if (hasCandidates) {
-                        return selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_1, insertToChat)
-                    }
-                }
-                in GLFW.GLFW_KEY_KP_1..GLFW.GLFW_KEY_KP_9 -> {
-                    if (hasCandidates) {
-                        return selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_KP_1, insertToChat)
-                    }
-                }
-
-                // F6〜F10: 無変換ショートカット（最初に入力した文字そのままの形式変換）
-                GLFW.GLFW_KEY_F6, GLFW.GLFW_KEY_F7, GLFW.GLFW_KEY_F9, GLFW.GLFW_KEY_F10 -> {
-                    val raw = rawBuffer.toString()
-                    val kana = romajiDetector.toKanaFinal(raw)
-                    applyDirectCandidate(
-                        when (keyCode) {
-                            GLFW.GLFW_KEY_F6 -> kana                                 // ひらがな
-                            GLFW.GLFW_KEY_F7 -> romajiDetector.toKatakana(kana)      // カタカナ
-                            GLFW.GLFW_KEY_F9 -> romajiDetector.toZenkakuAlpha(raw)   // 全角英数
-                            else -> raw                                              // F10: 半角英数そのまま
-                        }
-                    )
-                    return true
-                }
+        return when {
+            // Shift + F12 による「～」記号の入力
+            shift && keyCode == GLFW.GLFW_KEY_F12 -> {
+                appendToCompositionOrInsert("～", insertToChat)
+                true
             }
 
-            return false
+            // 設定画面で登録した任意の切り替えキー
+            MeltypeConfig.isToggleKey(keyCode, modifiers) -> {
+                toggleInputMode(insertToChat)
+                true
+            }
+
+            // 半角/全角キー（Shift 等の修飾キーが押されていない単独キー押下時のみ）
+            noModifiers(modifiers) && isHankakuZenkakuKey(keyCode, scanCode) -> {
+                skipNextGraveChar = true
+                toggleInputMode(insertToChat)
+                true
+            }
+
+            // Ctrl + Space
+            ctrl && keyCode == GLFW.GLFW_KEY_SPACE -> {
+                toggleInputMode(insertToChat)
+                true
+            }
+
+            // 変換キー -> HYBRIDモード
+            isHenkanKey(scanCode) -> {
+                setInputMode(InputMode.HYBRID, insertToChat)
+                true
+            }
+
+            // 無変換キー: 入力中は「ひらがな -> カタカナ -> 最初に入力した英字」を順に切り替え、入力中でなければ DIRECT モード
+            isMuhenkanKey(scanCode) -> {
+                if (isComposing) toggleMuhenkanCandidates() else setInputMode(InputMode.DIRECT, insertToChat)
+                true
+            }
+
+            else -> false
         }
+    }
+
+    private fun noModifiers(modifiers: Int): Boolean =
+        (modifiers and (GLFW.GLFW_MOD_SHIFT or GLFW.GLFW_MOD_CONTROL or GLFW.GLFW_MOD_ALT)) == 0
+
+    /**
+     * 入力中（バッファに文字がある）のときのキー処理
+     * @return true の場合、キーを消費した
+     */
+    private fun handleCompositionKey(keyCode: Int, modifiers: Int, insertToChat: (String) -> Unit): Boolean {
+        val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
+
+        return when (keyCode) {
+            GLFW.GLFW_KEY_SPACE -> onSpaceKey(shift, insertToChat)
+            GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> onEnterKey(shift, insertToChat)
+            GLFW.GLFW_KEY_BACKSPACE -> onBackspaceKey()
+            GLFW.GLFW_KEY_ESCAPE -> {
+                reset()
+                true
+            }
+            GLFW.GLFW_KEY_TAB -> onTabKey(shift)
+            GLFW.GLFW_KEY_RIGHT -> if (shift) { expandClause(); true } else moveSelection(1)
+            GLFW.GLFW_KEY_LEFT -> if (shift) { shrinkClause(); true } else moveSelection(-1)
+            GLFW.GLFW_KEY_DOWN -> {
+                if (!hasCandidates) {
+                    triggerConversion()
+                    true
+                } else {
+                    moveSelection(1)
+                }
+            }
+            GLFW.GLFW_KEY_UP -> moveSelection(-1)
+
+            // 1〜9の数字キー (メインキー & テンキー): 候補のダイレクト選択
+            in GLFW.GLFW_KEY_1..GLFW.GLFW_KEY_9 ->
+                hasCandidates && selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_1, insertToChat)
+            in GLFW.GLFW_KEY_KP_1..GLFW.GLFW_KEY_KP_9 ->
+                hasCandidates && selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_KP_1, insertToChat)
+
+            // F6〜F10: 最初に入力した文字そのままの形式変換
+            GLFW.GLFW_KEY_F6, GLFW.GLFW_KEY_F7, GLFW.GLFW_KEY_F9, GLFW.GLFW_KEY_F10 -> {
+                applyFunctionKeyConversion(keyCode)
+                true
+            }
+
+            else -> false
+        }
+    }
+
+    /**
+     * Space: ハイブリッド入力の最重要キー
+     * 候補が出ていれば次の候補へ、出ていなければ入力の種類を判定して変換（または英単語として確定）する
+     */
+    private fun onSpaceKey(shift: Boolean, insertToChat: (String) -> Unit): Boolean {
+        // Shift+Space: バッファに明示的に半角スペースを足して、文を続けて入力
+        if (shift) {
+            appendToCompositionOrInsert(" ", insertToChat)
+            return true
+        }
+
+        // 既に変換候補ウィンドウが出ている場合は次の候補へ
+        if (hasCandidates) {
+            selectedCandidateIndex = (selectedCandidateIndex + 1) % candidates.size
+            return true
+        }
+
+        val currentRaw = rawBuffer.toString()
+
+        // 英単語＋助詞/日本語の複合語・ハイブリッド文（例: "kyouhadiamondwotoriniikou", "diamondwosagasou"）
+        compoundWordSplitter.splitSentence(currentRaw)?.let {
+            applyPlan(conversionPlanner.planMultiCompound(it, currentRaw))
+            return true
+        }
+        compoundWordSplitter.split(currentRaw)?.let {
+            applyPlan(conversionPlanner.planCompound(it, currentRaw))
+            return true
+        }
+
+        // 英語判定（例: "diamond", "Modrinth"）: 変換候補は出さず、英単語＋半角スペースとして即座に確定
+        // ※日本語の日常語（sore, are, dare, sake 等）は日本語変換の候補を表示する
+        if (scoreEngine.isEnglishInput(currentRaw)) {
+            insertToChat("$currentRaw ")
+            reset()
+            return true
+        }
+
+        // 日本語判定（例: "kyouha", "sagasou"）: すぐにかな漢字変換を始めて、第一候補を表示
+        triggerConversion()
+        return true
+    }
+
+    /** Enter: 確定（Shift+Enter なら最初に入力した文字そのままで確定） */
+    private fun onEnterKey(shift: Boolean, insertToChat: (String) -> Unit): Boolean {
+        if (shift) flushAsIs(insertToChat) else commitCurrent(insertToChat)
+        return true
+    }
+
+    /** Backspace: 候補表示中・文節伸縮中は変換を解除、それ以外は1文字削除 */
+    private fun onBackspaceKey(): Boolean {
+        if (hasCandidates || clauseManager.clauseLength > 0) {
+            candidates = emptyList()
+            selectedCandidateIndex = 0
+            clauseManager.reset()
+            updatePreview()
+            return true
+        }
+        if (rawBuffer.isNotEmpty()) {
+            clauseManager.reset()
+            rawBuffer.deleteCharAt(rawBuffer.length - 1)
+            updatePreview()
+            return true
+        }
+        return false
+    }
+
+    /** Tab / Shift+Tab: 候補送り・戻し（候補が出ていなければ変換を始める） */
+    private fun onTabKey(shift: Boolean): Boolean {
+        if (!hasCandidates) {
+            triggerConversion()
+            return true
+        }
+        moveSelection(if (shift) -1 else 1)
+        return true
+    }
+
+    /** F6〜F10: ひらがな / カタカナ / 全角英数 / 半角英数（最初に入力した文字そのまま）の候補を最上位にする */
+    private fun applyFunctionKeyConversion(keyCode: Int) {
+        val raw = rawBuffer.toString()
+        val kana = romajiDetector.toKanaFinal(raw)
+        applyDirectCandidate(
+            when (keyCode) {
+                GLFW.GLFW_KEY_F6 -> kana                                 // ひらがな
+                GLFW.GLFW_KEY_F7 -> romajiDetector.toKatakana(kana)      // カタカナ
+                GLFW.GLFW_KEY_F9 -> romajiDetector.toZenkakuAlpha(raw)   // 全角英数
+                else -> raw                                              // F10: 半角英数そのまま
+            }
+        )
     }
 
     /**

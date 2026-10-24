@@ -36,92 +36,63 @@ class MeltypeConfigScreen(
         super.init()
 
         val centerX = width / 2
+        val rowX = centerX - BUTTON_WIDTH / 2
         var currentY = 48
 
-        // 1. 候補表示数 (7 <-> 9)
-        addRenderableWidget(
-            Button.builder(getCandidatesButtonText()) { button ->
-                MeltypeConfig.maxCandidates = if (MeltypeConfig.maxCandidates == 7) 9 else 7
-                button.message = getCandidatesButtonText()
-            }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
-        )
-        currentY += ROW_SPACING
+        // 設定ボタンを1行ずつ縦に並べる（押すたびに設定を変えて、ボタンの文字を更新する）
+        fun addRow(label: () -> Component, onClick: () -> Unit): Button {
+            val button = addSettingButton(rowX, currentY, label, onClick)
+            currentY += ROW_SPACING
+            return button
+        }
 
-        // 2. チャット開始時の初期入力モード (DIRECT ↔ HYBRID)
-        addRenderableWidget(
-            Button.builder(getInitialModeButtonText()) { button ->
-                MeltypeConfig.initialInputMode = if (MeltypeConfig.initialInputMode == InputMode.DIRECT) {
-                    InputMode.HYBRID
-                } else {
-                    InputMode.DIRECT
-                }
-                button.message = getInitialModeButtonText()
-            }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
-        )
-        currentY += ROW_SPACING
+        // 1. 候補表示数 (7 <-> 9)
+        addRow({ getCandidatesButtonText() }) {
+            MeltypeConfig.maxCandidates = if (MeltypeConfig.maxCandidates == 7) 9 else 7
+        }
+
+        // 2. チャット開始時の初期入力モード (DIRECT <-> HYBRID)
+        addRow({ getInitialModeButtonText() }) {
+            MeltypeConfig.initialInputMode = MeltypeConfig.initialInputMode.toggle()
+        }
 
         // 3. 前回のモード状態を維持・固定するか
-        addRenderableWidget(
-            Button.builder(getRememberModeButtonText()) { button ->
-                MeltypeConfig.rememberLastInputMode = !MeltypeConfig.rememberLastInputMode
-                button.message = getRememberModeButtonText()
-            }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
-        )
-        currentY += ROW_SPACING
+        addRow({ getRememberModeButtonText() }) {
+            MeltypeConfig.rememberLastInputMode = !MeltypeConfig.rememberLastInputMode
+        }
 
         // 4. チャット欄アイコンの表示・非表示
-        addRenderableWidget(
-            Button.builder(getIndicatorButtonText()) { button ->
-                MeltypeConfig.showModeIndicator = !MeltypeConfig.showModeIndicator
-                button.message = getIndicatorButtonText()
-            }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
-        )
-        currentY += ROW_SPACING
+        addRow({ getIndicatorButtonText() }) {
+            MeltypeConfig.showModeIndicator = !MeltypeConfig.showModeIndicator
+        }
 
         // 5. スラッシュコマンド時のIME自動解除
-        addRenderableWidget(
-            Button.builder(getAutoCommandButtonText()) { button ->
-                MeltypeConfig.autoCommandModeOnSlash = !MeltypeConfig.autoCommandModeOnSlash
-                button.message = getAutoCommandButtonText()
-            }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
-        )
-        currentY += ROW_SPACING
+        addRow({ getAutoCommandButtonText() }) {
+            MeltypeConfig.autoCommandModeOnSlash = !MeltypeConfig.autoCommandModeOnSlash
+        }
 
         // 6. 変換学習機能の有効・無効
-        addRenderableWidget(
-            Button.builder(getLearningButtonText()) { button ->
-                MeltypeConfig.learningEnabled = !MeltypeConfig.learningEnabled
-                button.message = getLearningButtonText()
-            }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
-        )
-        currentY += ROW_SPACING
+        addRow({ getLearningButtonText() }) {
+            MeltypeConfig.learningEnabled = !MeltypeConfig.learningEnabled
+        }
 
         // 7. Google 変換の使用（オフ時は打った文字を外部へ送らず、ローカル辞書のみで変換）
-        addRenderableWidget(
-            Button.builder(getGoogleButtonText()) { button ->
-                MeltypeConfig.useGoogleCgi = !MeltypeConfig.useGoogleCgi
-                button.message = getGoogleButtonText()
-            }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
-        )
-        currentY += ROW_SPACING
+        addRow({ getGoogleButtonText() }) {
+            MeltypeConfig.useGoogleCgi = !MeltypeConfig.useGoogleCgi
+        }
 
         // 8. 日本語判定のしきい値 (1 -> 2 -> 3 -> 4 -> 1)
-        addRenderableWidget(
-            Button.builder(getThresholdButtonText()) { button ->
-                MeltypeConfig.japaneseThreshold = if (MeltypeConfig.japaneseThreshold in 1..3) MeltypeConfig.japaneseThreshold + 1 else 1
-                button.message = getThresholdButtonText()
-            }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
-        )
-        currentY += ROW_SPACING
+        addRow({ getThresholdButtonText() }) {
+            val current = MeltypeConfig.japaneseThreshold
+            MeltypeConfig.japaneseThreshold = if (current in 1..3) current + 1 else 1
+        }
 
         // 9. 入力モード切り替えキーの登録（押すと登録待ちになり、次に押したキーを登録）
-        toggleKeyButton = Button.builder(getToggleKeyButtonText()) { button ->
+        toggleKeyButton = addRow({ getToggleKeyButtonText() }) {
             listeningForKey = true
             rejectedReason = null
-            button.message = getToggleKeyButtonText()
-        }.bounds(centerX - BUTTON_WIDTH / 2, currentY, BUTTON_WIDTH, BUTTON_HEIGHT).build()
-        addRenderableWidget(toggleKeyButton!!)
-        currentY += ROW_SPACING + 4
+        }
+        currentY += 4
 
         // 10. 下段アクションボタン: 学習履歴リセット (左) & 完了/保存 (右)
         val halfWidth = (BUTTON_WIDTH - 6) / 2
@@ -144,6 +115,15 @@ class MeltypeConfigScreen(
         keyHintY = currentY + BUTTON_HEIGHT + 6
     }
 
+    /** 設定ボタンを1つ追加する。押すと [onClick] で設定を変えたあと、[label] でボタンの文字を作り直す */
+    private fun addSettingButton(x: Int, y: Int, label: () -> Component, onClick: () -> Unit): Button {
+        val button = Button.builder(label()) { pressed ->
+            onClick()
+            pressed.message = label()
+        }.bounds(x, y, BUTTON_WIDTH, BUTTON_HEIGHT).build()
+        return addRenderableWidget(button)
+    }
+
     private fun getCandidatesButtonText(): Component {
         return Component.literal("変換候補の表示数: ${MeltypeConfig.maxCandidates} 個")
     }
@@ -159,8 +139,9 @@ class MeltypeConfigScreen(
     }
 
     private fun getIndicatorButtonText(): Component {
-        val state = if (MeltypeConfig.showModeIndicator) "表示" else "非表示"
-        return Component.literal("チャット欄アイコン [あ/A]: $state")
+        // 非表示にしても、Mod Menu の「設定」ボタンから、この画面を開ける
+        val state = if (MeltypeConfig.showModeIndicator) "表示" else "非表示 (Mod Menuで設定)"
+        return Component.literal("アイコン [あ/A]: $state")
     }
 
     private fun getAutoCommandButtonText(): Component {
