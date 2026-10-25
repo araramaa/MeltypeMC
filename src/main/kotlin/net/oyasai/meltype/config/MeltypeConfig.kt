@@ -39,6 +39,9 @@ object MeltypeConfig {
     /** 変換学習機能（よく使う単語を記憶して最上位に表示）を有効にするか */
     var learningEnabled: Boolean = true
 
+    /** 「#/」で始まる発言を送るとき、先頭の「#」を外して、相手に「/」から見えるようにするか */
+    var stripHashBeforeSlash: Boolean = true
+
     /** 入力モード切り替えキーの GLFW キーコード（-1: 未設定） */
     var toggleKeyCode: Int = -1
 
@@ -109,6 +112,7 @@ object MeltypeConfig {
             props.getProperty("learningEnabled")?.toBooleanStrictOrNull()?.let { learningEnabled = it }
             props.getProperty("japaneseThreshold")?.toIntOrNull()?.let { japaneseThreshold = it }
             props.getProperty("useGoogleCgi")?.toBooleanStrictOrNull()?.let { useGoogleCgi = it }
+            props.getProperty("stripHashBeforeSlash")?.toBooleanStrictOrNull()?.let { stripHashBeforeSlash = it }
             props.getProperty("toggleKeyCode")?.toIntOrNull()?.let { toggleKeyCode = it }
             props.getProperty("toggleKeyModifiers")?.toIntOrNull()?.let { toggleKeyModifiers = it and TOGGLE_MODIFIER_MASK }
         } catch (_: Throwable) {
@@ -132,6 +136,7 @@ object MeltypeConfig {
             props.setProperty("learningEnabled", learningEnabled.toString())
             props.setProperty("japaneseThreshold", japaneseThreshold.toString())
             props.setProperty("useGoogleCgi", useGoogleCgi.toString())
+            props.setProperty("stripHashBeforeSlash", stripHashBeforeSlash.toString())
             props.setProperty("toggleKeyCode", toggleKeyCode.toString())
             props.setProperty("toggleKeyModifiers", toggleKeyModifiers.toString())
 

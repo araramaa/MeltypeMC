@@ -1,6 +1,7 @@
 package net.oyasai.meltype
 
 import net.fabricmc.api.ClientModInitializer
+import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents
@@ -12,7 +13,9 @@ import net.minecraft.client.gui.screens.inventory.AnvilScreen
 import net.minecraft.client.gui.screens.inventory.BookEditScreen
 import net.minecraft.client.input.CharacterEvent
 import net.oyasai.meltype.conversion.GoogleCgiConverter
+import net.oyasai.meltype.config.MeltypeConfig
 import net.oyasai.meltype.engine.EnglishDetector
+import net.oyasai.meltype.engine.HashSlashMessage
 import net.oyasai.meltype.engine.MeltypeSession
 import net.oyasai.meltype.engine.RomajiDetector
 import net.oyasai.meltype.engine.ScoreEngine
@@ -65,6 +68,11 @@ object MeltypeClient : ClientModInitializer {
         // 画面が完全に構築された AFTER_INIT のタイミングで各種ハンドラを画面インスタンスへ登録します。
         ScreenEvents.AFTER_INIT.register(ScreenEvents.AfterInit { _, screen, _, _ ->
             registerScreenHandlers(screen)
+        })
+
+        // 「#/」で始まる発言は、送信するときに先頭の「#」を外す（コマンドとして実行されず、相手に「/」から見える）
+        ClientSendMessageEvents.MODIFY_CHAT.register(ClientSendMessageEvents.ModifyChat { message ->
+            if (MeltypeConfig.enabled && MeltypeConfig.stripHashBeforeSlash) HashSlashMessage.strip(message) else message
         })
 
         logger.info("[MeltypeMC] Successfully initialized! Auto English/Japanese detection and '/' command mode are ready.")

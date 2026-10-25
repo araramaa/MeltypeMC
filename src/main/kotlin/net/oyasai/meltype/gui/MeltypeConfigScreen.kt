@@ -87,14 +87,19 @@ class MeltypeConfigScreen(
             MeltypeConfig.japaneseThreshold = if (current in 1..3) current + 1 else 1
         }
 
-        // 9. 入力モード切り替えキーの登録（押すと登録待ちになり、次に押したキーを登録）
+        // 9. 「#/」で始まる発言の、先頭の「#」を送信時に外すか（コマンドを人に伝えるとき用）
+        addRow({ getStripHashButtonText() }) {
+            MeltypeConfig.stripHashBeforeSlash = !MeltypeConfig.stripHashBeforeSlash
+        }
+
+        // 10. 入力モード切り替えキーの登録（押すと登録待ちになり、次に押したキーを登録）
         toggleKeyButton = addRow({ getToggleKeyButtonText() }) {
             listeningForKey = true
             rejectedReason = null
         }
         currentY += 4
 
-        // 10. 下段アクションボタン: 学習履歴リセット (左) & 完了/保存 (右)
+        // 11. 下段アクションボタン: 学習履歴リセット (左) & 完了/保存 (右)
         val halfWidth = (BUTTON_WIDTH - 6) / 2
 
         addRenderableWidget(
@@ -157,6 +162,11 @@ class MeltypeConfigScreen(
     private fun getGoogleButtonText(): Component {
         val state = if (MeltypeConfig.useGoogleCgi) "使う (打った文字をGoogleへ送信)" else "使わない (外部へ送信しない)"
         return Component.literal("Google変換: $state")
+    }
+
+    private fun getStripHashButtonText(): Component {
+        val state = if (MeltypeConfig.stripHashBeforeSlash) "ON (#/tp → /tp と見える)" else "OFF"
+        return Component.literal("発言の先頭の #/ の # を外す: $state")
     }
 
     private fun getThresholdButtonText(): Component {
