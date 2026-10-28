@@ -72,7 +72,15 @@ object MeltypeClient : ClientModInitializer {
 
         // 「#/」で始まる発言は、送信するときに先頭の「#」を外す（コマンドとして実行されず、相手に「/」から見える）
         ClientSendMessageEvents.MODIFY_CHAT.register(ClientSendMessageEvents.ModifyChat { message ->
-            if (MeltypeConfig.enabled && MeltypeConfig.stripHashBeforeSlash) HashSlashMessage.strip(message) else message
+            val result = if (MeltypeConfig.enabled && MeltypeConfig.stripHashBeforeSlash) HashSlashMessage.strip(message) else message
+            // 【調査用・あとで消す】「#」で始まる発言だけ、設定の状態と、前後の先頭3文字を記録する（発言の中身は記録しない）
+            if (message.startsWith("#")) {
+                logger.info(
+                    "[MeltypeMC][調査] 送信前='{}' 送信後='{}' 外す設定={} 有効={}",
+                    message.take(3), result.take(3), MeltypeConfig.stripHashBeforeSlash, MeltypeConfig.enabled
+                )
+            }
+            result
         })
 
         logger.info("[MeltypeMC] Successfully initialized! Auto English/Japanese detection and '/' command mode are ready.")
