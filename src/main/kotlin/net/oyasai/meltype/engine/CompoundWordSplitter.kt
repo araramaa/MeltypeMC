@@ -61,7 +61,8 @@ class CompoundWordSplitter(
             "sou", "kou", "kai", "dai", "mai", "tai", "sai", "kan", "man", "tan",
             "ano", "ima", "asa", "sora", "hana", "kawa", "yama", "kiri", "ame",
             "mori", "kami", "machi", "michi", "kaze", "tsuki", "hoshi", "kane",
-            "saga", "sagas", "date", "mine", "fine", "line", "sore", "are", "dare", "tame"
+            "saga", "sagas", "date", "mine", "fine", "line", "sore", "are", "dare", "tame",
+            "motto", "dame"
         )
 
         /**

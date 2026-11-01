@@ -8,6 +8,26 @@ import org.junit.jupiter.api.Test
 /** 英日判定・ローマ字解析・複合語の分割のテスト */
 class DetectionTest : MeltypeTestBase() {
 
+    /**
+     * 英単語辞書にも載っている日本語の日常語（motto=もっと、dame=だめ）が、英語に誤判定されず、
+     * 英単語＋助詞の分割にも使われないことの検証
+     */
+    @Test
+    fun testMottoAndDameAreTreatedAsJapanese() {
+        for (w in listOf("motto", "dame")) {
+            assertFalse(scoreEngine.isEnglishInput(w), "$w は日本語として扱うこと")
+        }
+        assertEquals("もっと", romajiDetector.toKanaFinal("motto"))
+        assertEquals("だめ", romajiDetector.toKanaFinal("dame"))
+
+        val splitter = CompoundWordSplitter(englishDetector, romajiDetector)
+        // 「もっとがんばる」「だめです」が、英単語 motto / dame ＋ 日本語に分けられない
+        assertNull(splitter.split("mottoganbaru"))
+        assertNull(splitter.splitSentence("mottoganbaru"))
+        assertNull(splitter.split("damedesu"))
+        assertNull(splitter.splitSentence("damedesu"))
+    }
+
     @Test
     fun testRomajiAnalysis() {
         val analysis = romajiDetector.analyze("kyouha")

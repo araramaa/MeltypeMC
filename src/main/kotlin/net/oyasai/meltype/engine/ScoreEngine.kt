@@ -40,7 +40,7 @@ class ScoreEngine(
             "soko", "koko", "haka", "mori", "kami", "kaze", "tsuki", "hoshi",
             "machi", "michi", "kane", "ame", "asa", "hiru", "yoru", "hana",
             "kawa", "yama", "kiri", "sora", "ima", "ano", "kono", "sono",
-            "ohayou", "arigatou", "you"
+            "ohayou", "arigatou", "you", "motto", "dame"
         )
     }
 
