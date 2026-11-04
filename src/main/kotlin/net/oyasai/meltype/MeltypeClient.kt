@@ -90,7 +90,15 @@ object MeltypeClient : ClientModInitializer {
             if (!isTextInputActive(s)) return@AllowKeyPress true
 
             try {
-                val handled = session.onKeyPressed(keyEvent.key(), keyEvent.scancode(), keyEvent.modifiers()) { commitText ->
+                val scancode = KeyEventCompat.scancode(keyEvent)
+                // 【調査用・あとで消す】26.3 でキーがどんな値で届くかを確かめる（文字・数字・記号のキーは、中身が分かるので記録しない）
+                if (keyEvent.key() !in 32..126) {
+                    logger.info(
+                        "[MeltypeMC][調査] key={} keycode={} scancode={} modifiers={}",
+                        keyEvent.key(), KeyEventCompat.keycode(keyEvent), scancode, keyEvent.modifiers()
+                    )
+                }
+                val handled = session.onKeyPressed(keyEvent.key(), scancode, keyEvent.modifiers()) { commitText ->
                     insertTextToScreen(s, commitText)
                 }
                 // Meltypeで処理された場合はバニラ画面の通常キー処理をキャンセル
