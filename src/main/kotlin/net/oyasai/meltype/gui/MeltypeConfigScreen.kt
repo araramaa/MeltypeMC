@@ -5,6 +5,7 @@ import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.network.chat.Component
+import net.oyasai.meltype.KeyEventCompat
 import net.oyasai.meltype.config.MeltypeConfig
 import net.oyasai.meltype.conversion.ConversionLearningStore
 import net.oyasai.meltype.engine.InputMode
@@ -30,6 +31,21 @@ class MeltypeConfigScreen(
         private const val BUTTON_WIDTH = 280
         private const val BUTTON_HEIGHT = 20
         private const val ROW_SPACING = 22
+
+        /** 最初のボタンの Y 座標（タイトルと説明の下） */
+        private const val FIRST_ROW_Y = 48
+
+        /** 候補の表示数として選べる、2つの値（押すたびに切り替わる） */
+        private const val CANDIDATES_SMALL = 7
+        private const val CANDIDATES_LARGE = 9
+
+        /** 日本語判定のしきい値の、選べる範囲（最大の次は 1 に戻る） */
+        private const val THRESHOLD_MIN = 1
+        private const val THRESHOLD_MAX = 4
+
+        /** 案内の文字の色 */
+        private const val HINT_COLOR = 0xFFAAAAAA.toInt()
+        private const val FOOTER_COLOR = 0xFF888888.toInt()
     }
 
     override fun init() {
@@ -37,7 +53,7 @@ class MeltypeConfigScreen(
 
         val centerX = width / 2
         val rowX = centerX - BUTTON_WIDTH / 2
-        var currentY = 48
+        var currentY = FIRST_ROW_Y
 
         // 設定ボタンを1行ずつ縦に並べる（押すたびに設定を変えて、ボタンの文字を更新する）
         fun addRow(label: () -> Component, onClick: () -> Unit): Button {
@@ -48,7 +64,8 @@ class MeltypeConfigScreen(
 
         // 1. 候補表示数 (7 <-> 9)
         addRow({ getCandidatesButtonText() }) {
-            MeltypeConfig.maxCandidates = if (MeltypeConfig.maxCandidates == 7) 9 else 7
+            MeltypeConfig.maxCandidates =
+                if (MeltypeConfig.maxCandidates == CANDIDATES_SMALL) CANDIDATES_LARGE else CANDIDATES_SMALL
         }
 
         // 2. チャット開始時の初期入力モード (DIRECT <-> HYBRID)
@@ -84,7 +101,8 @@ class MeltypeConfigScreen(
         // 8. 日本語判定のしきい値 (1 -> 2 -> 3 -> 4 -> 1)
         addRow({ getThresholdButtonText() }) {
             val current = MeltypeConfig.japaneseThreshold
-            MeltypeConfig.japaneseThreshold = if (current in 1..3) current + 1 else 1
+            MeltypeConfig.japaneseThreshold =
+                if (current in THRESHOLD_MIN until THRESHOLD_MAX) current + 1 else THRESHOLD_MIN
         }
 
         // 9. 「#/」で始まる発言の、先頭の「#」を送信時に外すか（コマンドを人に伝えるとき用）
@@ -180,42 +198,22 @@ class MeltypeConfigScreen(
                 if (reason == null) "切り替えキー: キーを押してください (Esc: 解除)" else "× $reason"
             )
         }
+        // 登録していないときは、初期設定の変換キーを表示する（変換キーは、登録したあとも使える）
         val keyName = if (MeltypeConfig.toggleKeyCode < 0) {
-            "未設定"
+            "変換キー (初期設定)"
         } else {
-            modifierPrefix(MeltypeConfig.toggleKeyModifiers) + keyName(MeltypeConfig.toggleKeyCode)
+            ToggleKeyLabels.modifierPrefix(MeltypeConfig.toggleKeyModifiers) +
+                ToggleKeyLabels.keyName(MeltypeConfig.toggleKeyCode) + " (変換キーも使えます)"
         }
         return Component.literal("切り替えキー: $keyName")
-    }
-
-    /** 登録できなかったキーの理由（ボタンに表示する短い説明） */
-    private fun rejectReason(key: Int): String = when {
-        key < 0 -> "登録できないキーです。別のキーを"
-        key in GLFW.GLFW_KEY_SPACE..GLFW.GLFW_KEY_GRAVE_ACCENT ->
-            "文字キーは Ctrl か Alt と一緒に"
-        else -> "登録できないキーです。別のキーを"
-    }
-
-    private fun modifierPrefix(modifiers: Int): String {
-        var prefix = ""
-        if ((modifiers and GLFW.GLFW_MOD_CONTROL) != 0) prefix += "Ctrl+"
-        if ((modifiers and GLFW.GLFW_MOD_ALT) != 0) prefix += "Alt+"
-        if ((modifiers and GLFW.GLFW_MOD_SHIFT) != 0) prefix += "Shift+"
-        return prefix
-    }
-
-    private fun keyName(keyCode: Int): String {
-        if (keyCode in GLFW.GLFW_KEY_F1..GLFW.GLFW_KEY_F25) return "F${keyCode - GLFW.GLFW_KEY_F1 + 1}"
-        val named = try { GLFW.glfwGetKeyName(keyCode, 0) } catch (_: Throwable) { null }
-        return named?.uppercase() ?: "キー$keyCode"
     }
 
     /** 登録待ちの間に押されたキーを切り替えキーとして保存（Esc で解除） */
     override fun keyPressed(event: KeyEvent): Boolean {
         if (!listeningForKey) return super.keyPressed(event)
 
-        val key = event.key()
-        val mods = event.modifiers() and MeltypeConfig.TOGGLE_MODIFIER_MASK
+        val key = KeyEventCompat.glfwKey(event)
+        val mods = KeyEventCompat.glfwModifiers(event) and MeltypeConfig.TOGGLE_MODIFIER_MASK
         when {
             key == GLFW.GLFW_KEY_ESCAPE -> {
                 MeltypeConfig.toggleKeyCode = -1
@@ -231,7 +229,7 @@ class MeltypeConfigScreen(
             }
             else -> {
                 // 登録できないキーは登録せず、理由を表示して待機を続ける
-                rejectedReason = rejectReason(key)
+                rejectedReason = ToggleKeyLabels.rejectReason(key)
                 toggleKeyButton?.message = getToggleKeyButtonText()
                 return true
             }
@@ -249,17 +247,22 @@ class MeltypeConfigScreen(
         extractor.textRenderer().accept((width - titleWidth) / 2, 16, title.copy().withColor(0xFFFFFFFF.toInt()))
 
         // サブタイトル表示
-        val subtitle = Component.literal("チャット・日本語入力の動作設定").withColor(0xFFAAAAAA.toInt())
+        val subtitle = Component.literal("チャット・日本語入力の動作設定").withColor(HINT_COLOR)
         val subtitleWidth = font.width(subtitle)
         extractor.textRenderer().accept((width - subtitleWidth) / 2, 30, subtitle)
 
         // 切り替えキーの案内（メニューのすぐ下）
-        val keyHint = Component.literal("モード切り替え: Ctrl+Space / 半角全角 / 変換 / 無変換キー").withColor(0xFFAAAAAA.toInt())
+        val keyHint = Component.literal("モード切り替え: 変換 / Ctrl+Space　　設定画面: F12").withColor(HINT_COLOR)
         val keyHintWidth = font.width(keyHint)
         extractor.textRenderer().accept((width - keyHintWidth) / 2, keyHintY, keyHint)
 
+        // Windows の日本語入力についての注意（MOD の変換と二重にならないように）
+        val imeHint = Component.literal("※ Windows の日本語入力は「A」にして使ってください").withColor(HINT_COLOR)
+        val imeHintWidth = font.width(imeHint)
+        extractor.textRenderer().accept((width - imeHintWidth) / 2, keyHintY + 12, imeHint)
+
         // 画面下部ヒント
-        val hint = Component.literal("※ チャット欄の [あ/A] アイコンを右クリックでいつでも開けます").withColor(0xFF888888.toInt())
+        val hint = Component.literal("※ チャット欄の [あ/A] アイコンを右クリックでいつでも開けます").withColor(FOOTER_COLOR)
         val hintWidth = font.width(hint)
         extractor.textRenderer().accept((width - hintWidth) / 2, height - 20, hint)
     }

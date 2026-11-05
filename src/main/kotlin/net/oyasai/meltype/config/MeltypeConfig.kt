@@ -55,6 +55,7 @@ object MeltypeConfig {
     /** 切り替えキーとして登録できるキーか（通常の文字入力・Enter・Backspace 等を奪わないための制限） */
     fun isAllowedToggleKey(keyCode: Int, modifiers: Int): Boolean {
         val hasCtrlOrAlt = (modifiers and (GLFW.GLFW_MOD_CONTROL or GLFW.GLFW_MOD_ALT)) != 0
+        if (isOpenSettingsKey(keyCode, modifiers)) return false // F12 は設定画面を開くキーなので、切り替えには使えない
         return when (keyCode) {
             GLFW.GLFW_KEY_ESCAPE, GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_TAB, GLFW.GLFW_KEY_BACKSPACE,
             GLFW.GLFW_KEY_LEFT, GLFW.GLFW_KEY_RIGHT, GLFW.GLFW_KEY_UP, GLFW.GLFW_KEY_DOWN -> false
@@ -65,6 +66,10 @@ object MeltypeConfig {
             else -> keyCode >= 0
         }
     }
+
+    /** 設定画面を開くキーか（F12。Shift+F12 は「～」、Ctrl/Alt との組み合わせは対象外） */
+    fun isOpenSettingsKey(keyCode: Int, modifiers: Int): Boolean =
+        keyCode == GLFW.GLFW_KEY_F12 && (modifiers and TOGGLE_MODIFIER_MASK) == 0
 
     /** 押されたキーが登録済みの切り替えキーと一致するか */
     fun isToggleKey(keyCode: Int, modifiers: Int): Boolean {

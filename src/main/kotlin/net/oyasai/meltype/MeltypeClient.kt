@@ -80,25 +80,31 @@ object MeltypeClient : ClientModInitializer {
 
     private fun registerScreenHandlers(screen: Screen) {
         if (!isTextInputActive(screen)) return
-        if (!attachedScreens.add(screen)) return // 同一画面インスタンスへの多重登録を防止
 
-        logger.info("[MeltypeMC] Attaching input handlers to screen: ${screen.javaClass.simpleName}")
-        session.resetForNewScreen()
+        // 同じ画面が作り直された（ウィンドウの大きさの変更、F11 の全画面の切り替えなど）ときは、
+        // Fabric が、その画面のイベント（キー・文字・マウス・描画）を、すべて作り直して空にする。
+        // そのため、登録は毎回やり直す。入力途中の文字や候補は、そのまま残す。
+        val isNewScreen = attachedScreens.add(screen)
+        if (isNewScreen) {
+            logger.info("[MeltypeMC] Attaching input handlers to screen: ${screen.javaClass.simpleName}")
+            session.resetForNewScreen()
+        }
 
         // 特殊キー入力（Space, Enter, Backspace, Tab, 矢印キー等）のインターセプト
         ScreenKeyboardEvents.allowKeyPress(screen).register(ScreenKeyboardEvents.AllowKeyPress { s, keyEvent ->
             if (!isTextInputActive(s)) return@AllowKeyPress true
 
             try {
+                // Minecraft の版によるキー番号の違いは、KeyEventCompat で、26.2 までの番号（GLFW 方式）に揃える
+                val key = KeyEventCompat.glfwKey(keyEvent)
+                val modifiers = KeyEventCompat.glfwModifiers(keyEvent)
                 val scancode = KeyEventCompat.scancode(keyEvent)
-                // 【調査用・あとで消す】26.3 でキーがどんな値で届くかを確かめる（文字・数字・記号のキーは、中身が分かるので記録しない）
-                if (keyEvent.key() !in 32..126) {
-                    logger.info(
-                        "[MeltypeMC][調査] key={} keycode={} scancode={} modifiers={}",
-                        keyEvent.key(), KeyEventCompat.keycode(keyEvent), scancode, keyEvent.modifiers()
-                    )
+                // F12（修飾キーなし）は、設定画面を開く
+                if (MeltypeConfig.enabled && MeltypeConfig.isOpenSettingsKey(key, modifiers)) {
+                    openConfigScreen(s)
+                    return@AllowKeyPress false
                 }
-                val handled = session.onKeyPressed(keyEvent.key(), scancode, keyEvent.modifiers()) { commitText ->
+                val handled = session.onKeyPressed(key, scancode, modifiers) { commitText ->
                     insertTextToScreen(s, commitText)
                 }
                 // Meltypeで処理された場合はバニラ画面の通常キー処理をキャンセル
@@ -113,15 +119,13 @@ object MeltypeClient : ClientModInitializer {
         ScreenMouseEvents.allowMouseClick(screen).register(ScreenMouseEvents.AllowMouseClick { s, mouseButtonEvent ->
             try {
                 if (IndicatorLayout.isClicked(s, mouseButtonEvent.x(), mouseButtonEvent.y())) {
-                    if (mouseButtonEvent.button() == 0) { // 左クリック: 入力モード切替
+                    if (KeyEventCompat.mouseButton(mouseButtonEvent) == 0) { // 左クリック: 入力モード切替
                         session.toggleInputMode { commitText ->
                             insertTextToScreen(s, commitText)
                         }
                         return@AllowMouseClick false // クリックを消費
-                    } else if (mouseButtonEvent.button() == 1) { // 右クリック: 設定メニューを開く
-                        net.minecraft.client.Minecraft.getInstance().setScreenAndShow(
-                            net.oyasai.meltype.gui.MeltypeConfigScreen(s, session.learningStore)
-                        )
+                    } else if (KeyEventCompat.mouseButton(mouseButtonEvent) == 1) { // 右クリック: 設定メニューを開く
+                        openConfigScreen(s)
                         return@AllowMouseClick false // クリックを消費
                     }
                 }
@@ -173,6 +177,13 @@ object MeltypeClient : ClientModInitializer {
     /**
      * テキスト入力がアクティブな画面・ウィジェットであるかを安全に判定
      */
+    /** Meltype の設定画面を開く（元の画面は、設定画面を閉じたときに戻る） */
+    private fun openConfigScreen(parent: Screen) {
+        net.minecraft.client.Minecraft.getInstance().setScreenAndShow(
+            net.oyasai.meltype.gui.MeltypeConfigScreen(parent, session.learningStore)
+        )
+    }
+
     private fun isTextInputActive(screen: Screen): Boolean {
         val className = screen.javaClass.name
         if (screen is ChatScreen || screen is AnvilScreen || screen is AbstractSignEditScreen || screen is BookEditScreen) {

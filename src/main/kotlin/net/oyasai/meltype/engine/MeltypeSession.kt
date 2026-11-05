@@ -9,6 +9,16 @@ import org.lwjgl.glfw.GLFW
 /**
  * 1回のチャット・GUI入力セッション（入力バッファ・変換候補・状態遷移）を管理するクラス
  * ［半角/全角キー不要］の自動英日ハイブリッド入力システムを実装しています。
+ *
+ * このクラスは「状態」と「キー・文字を受けたときの流れ」を持つ。
+ * キーや文字の見分け・候補の作り方・確定する文字の決め方は、次の部品に任せている。
+ * - [KeyClassifier] / [InputCharacters]: キーと文字の見分け
+ * - [ConversionPlanner]: 変換の種類の判定と候補の作り方
+ * - [CommitTextResolver]: 確定する文字の決め方と、学習の記録
+ * - [FunctionKeyFormatter]: F6〜F10 の形式変換
+ * - [ClauseManager]: 変換する範囲（文節）の伸縮
+ *
+ * 状態を変える処理は、すべて [lock] の中で行う（非同期の変換結果が戻ってくるため）。
  */
 class MeltypeSession(
     private val romajiDetector: RomajiDetector,
@@ -21,6 +31,29 @@ class MeltypeSession(
 ) {
 
     private val lock = Any()
+
+    // ---------------------------------------------------------------------------------
+    // 協力する部品
+    // ---------------------------------------------------------------------------------
+
+    /** 文節伸縮マネージャー */
+    private val clauseManager = ClauseManager()
+
+    /** 変換の種類の判定と候補の作り方を決めるプランナー */
+    private val conversionPlanner = ConversionPlanner(romajiDetector, scoreEngine, compoundWordSplitter, converter, learningStore)
+
+    /** プレビュー文字列生成フォーマッター */
+    private val previewFormatter = PreviewFormatter(romajiDetector, scoreEngine, compoundWordSplitter)
+
+    /** 確定する文字を決め、選んだ変換を学習として記録する部品 */
+    private val commitTextResolver = CommitTextResolver(scoreEngine, compoundWordSplitter, learningStore)
+
+    /** F6〜F10 の形式変換 */
+    private val functionKeyFormatter = FunctionKeyFormatter(romajiDetector)
+
+    // ---------------------------------------------------------------------------------
+    // 状態
+    // ---------------------------------------------------------------------------------
 
     /** 現在変換中の読み・入力文字列（学習記録用） */
     private var activeReading: String = ""
@@ -35,15 +68,6 @@ class MeltypeSession(
     /** 現在の入力モード（HYBRID: 自動英日ハイブリッド / DIRECT: バニラ直接入力） */
     var currentInputMode: InputMode = MeltypeConfig.initialInputMode
         private set
-
-    /** 文節伸縮マネージャー */
-    private val clauseManager = ClauseManager()
-
-    /** 変換の種類の判定と候補の作り方を決めるプランナー */
-    private val conversionPlanner = ConversionPlanner(romajiDetector, scoreEngine, compoundWordSplitter, converter, learningStore)
-
-    /** プレビュー文字列生成フォーマッター */
-    private val previewFormatter = PreviewFormatter(romajiDetector, scoreEngine, compoundWordSplitter)
 
     /** 現在入力中の生キーストローク（アルファベット列） */
     var rawBuffer: StringBuilder = StringBuilder()
@@ -72,22 +96,25 @@ class MeltypeSession(
     /** Ctrl+Space で切り替えた直後に、続けて届く空白文字（U+0020）を入力させないためのフラグ */
     private var skipNextSpaceChar: Boolean = false
 
+    /** 数字キーで候補を選んだ直後に、続けて届く数字の文字（その数字）を入力させないための記憶。なければ null */
+    private var skipNextDigitChar: Char? = null
+
     /** 現在IME入力・変換中かどうか */
     val isComposing: Boolean get() = synchronized(lock) { rawBuffer.isNotEmpty() }
 
     /** 変換候補ウィンドウを表示中かどうか */
     val hasCandidates: Boolean get() = synchronized(lock) { candidates.isNotEmpty() }
 
+    // ---------------------------------------------------------------------------------
+    // 入力モード
+    // ---------------------------------------------------------------------------------
+
     /**
      * 入力モードをトグル（HYBRID ↔ DIRECT）
      */
     fun toggleInputMode(insertToChat: ((String) -> Unit)? = null): InputMode {
         synchronized(lock) {
-            if (isComposing && insertToChat != null) {
-                commitCurrent(insertToChat)
-            } else {
-                reset()
-            }
+            finishCompositionBeforeModeChange(insertToChat)
             currentInputMode = currentInputMode.toggle()
             return currentInputMode
         }
@@ -99,13 +126,18 @@ class MeltypeSession(
     fun setInputMode(mode: InputMode, insertToChat: ((String) -> Unit)? = null) {
         synchronized(lock) {
             if (currentInputMode != mode) {
-                if (isComposing && insertToChat != null) {
-                    commitCurrent(insertToChat)
-                } else {
-                    reset()
-                }
+                finishCompositionBeforeModeChange(insertToChat)
                 currentInputMode = mode
             }
+        }
+    }
+
+    /** モードを変える前に、入力中の文字を片付ける（確定できるなら確定、できないなら捨てる） */
+    private fun finishCompositionBeforeModeChange(insertToChat: ((String) -> Unit)?) {
+        if (isComposing && insertToChat != null) {
+            commitCurrent(insertToChat)
+        } else {
+            reset()
         }
     }
 
@@ -121,33 +153,9 @@ class MeltypeSession(
         }
     }
 
-    companion object {
-        /** JIS 半角/全角キースキャンコード (41 / 0x29) */
-        const val SCAN_HANKAKU_ZENKAKU = 41
-
-        /** JIS 変換キースキャンコード (121) */
-        const val SCAN_HENKAN = 121
-
-        /** JIS 無変換キースキャンコード (123) */
-        const val SCAN_MUHENKAN = 123
-    }
-
-    /**
-     * 半角/全角キー判定 (JIS スキャンコード 41 / GLFW_KEY_GRAVE_ACCENT / WORLDキー / F12)
-     */
-    fun isHankakuZenkakuKey(keyCode: Int, scanCode: Int): Boolean {
-        if (scanCode == SCAN_HANKAKU_ZENKAKU) return true
-        if (keyCode == GLFW.GLFW_KEY_GRAVE_ACCENT) return true
-        if (keyCode == GLFW.GLFW_KEY_WORLD_1 || keyCode == GLFW.GLFW_KEY_WORLD_2) return true
-        if (keyCode == GLFW.GLFW_KEY_F12) return true
-        return false
-    }
-
-    /** 変換キー判定 (JIS スキャンコード 121) */
-    fun isHenkanKey(scanCode: Int): Boolean = scanCode == SCAN_HENKAN
-
-    /** 無変換キー判定 (JIS スキャンコード 123) */
-    fun isMuhenkanKey(scanCode: Int): Boolean = scanCode == SCAN_MUHENKAN
+    // ---------------------------------------------------------------------------------
+    // 文字入力（charTyped）
+    // ---------------------------------------------------------------------------------
 
     /**
      * 文字入力イベント（charTyped）の処理
@@ -157,94 +165,97 @@ class MeltypeSession(
         if (!MeltypeConfig.enabled) return false
 
         synchronized(lock) {
-            // Ctrl+Space で切り替えた直後に届く空白文字は、入力せずに捨てる（モードに関係なく）
-            if (skipNextSpaceChar) {
-                skipNextSpaceChar = false
-                if (c == ' ') return true
-            }
+            // 切り替えキーの直後に届く、余計な空白・バッククォートの文字は捨てる（モードに関係なく）
+            if (shouldDiscardChar(c)) return true
 
-            // 半角/全角キー押下直後のバッククォート文字等の誤入力を抑止（~ は記号として有効なため除外）
-            if (skipNextGraveChar) {
-                skipNextGraveChar = false
-                if (c == '`' || c == '｀' || c == '\u0000') {
-                    return true
-                }
-            }
-
-            // 半角/全角キー（バッククォート）が charTyped として飛んできた場合の完全救済（~ は記号として有効なため除外）
-            if (c == '`' || c == '｀') {
+            // 半角/全角キー（バッククォート）が charTyped として飛んできた場合の完全救済
+            if (InputCharacters.isBackquote(c)) {
                 toggleInputMode(insertToChat)
                 return true
             }
 
             // 直接入力固定モード（DIRECT）時は、一切介入せずMinecraft標準に任せる
-            if (currentInputMode == InputMode.DIRECT) {
-                return false
-            }
+            if (currentInputMode == InputMode.DIRECT) return false
 
-            // --- ここから下はハイブリッド自動判別モード（HYBRID）の処理 ---
+            return handleHybridChar(c, currentChatText, insertToChat)
+        }
+    }
 
-            // 1. スラッシュコマンド判定（最優先: コマンド入力時は自動直接入力）
-            if (slashCommandGate.shouldBypassIme(currentChatText, c)) {
-                if (isComposing) {
-                    flushAsIs(insertToChat)
-                }
-                return false // マイクラ標準処理に任せる
-            }
+    /**
+     * 切り替えキーを押した直後に、続けて届く文字を捨てるか判定する。
+     * - Ctrl+Space の直後に届く空白（U+0020）
+     * - 半角/全角キーの直後に届くバッククォート等（`~` は記号として有効なので除外）
+     * - 数字キーで候補を選んだ直後に届く、その数字
+     */
+    private fun shouldDiscardChar(c: Char): Boolean {
+        skipNextDigitChar?.let { digit ->
+            skipNextDigitChar = null
+            if (c == digit) return true
+        }
+        if (skipNextSpaceChar) {
+            skipNextSpaceChar = false
+            if (c == ' ') return true
+        }
+        if (skipNextGraveChar) {
+            skipNextGraveChar = false
+            if (InputCharacters.isBackquote(c) || c == '\u0000') return true
+        }
+        return false
+    }
 
-            // 2. 空白（スペース）の処理: keyPressed 側で英単語確定または日本語変換として処理
-            if (c == ' ') {
-                if (isComposing) {
-                    return true
-                }
-                return false
-            }
+    /**
+     * ハイブリッド自動判別モード（HYBRID）での、1文字の処理
+     * @return true の場合、入力を消費した
+     */
+    private fun handleHybridChar(c: Char, currentChatText: String, insertToChat: (String) -> Unit): Boolean {
+        // 1. スラッシュコマンド判定（最優先: コマンド入力時は自動直接入力）
+        if (slashCommandGate.shouldBypassIme(currentChatText, c)) {
+            if (isComposing) flushAsIs(insertToChat)
+            return false // マイクラ標準処理に任せる
+        }
 
-            // 3. 入力可能な英字またはハイフン
-            if (c in 'a'..'z' || c in 'A'..'Z' || c == '-') {
-                // ★重要: 直前の単語が変換中（候補表示中、または前単語が存在）の状態で英字が入力された場合
-                // 直前の単語をチャット欄へ自動確定して、新しい単語の入力をクリーンに開始！
-                if (hasCandidates) {
-                    commitCurrent(insertToChat)
-                }
+        // 2. 空白（スペース）: keyPressed 側で英単語確定または日本語変換として処理するので、入力中は文字を入れない
+        if (c == ' ') return isComposing
 
-                clauseManager.reset()
-                rawBuffer.append(c)
-                updatePreview()
-                return true
-            }
+        // 3. 入力可能な英字またはハイフン
+        if (InputCharacters.isRomajiInputChar(c)) {
+            // 直前の単語が変換中（候補表示中）なら、先にチャット欄へ確定して、新しい単語の入力をクリーンに始める
+            if (hasCandidates) commitCurrent(insertToChat)
 
-            // 4. 日本語入力中の句読点・記号（確定させずにバッファに保持して文の入力を継続）
-            val punctuation = if (isComposing) toFullWidthPunctuation(c) else null
-            if (punctuation != null) {
-                appendToCompositionOrInsert(punctuation, insertToChat)
-                return true
-            }
+            clauseManager.reset()
+            rawBuffer.append(c)
+            updatePreview()
+            return true
+        }
 
-            // 5. 非変換中（バッファが空）での波線記号入力（HYBRIDモード時は全角「～」を直接挿入）
-            if (!isComposing && (c == '~' || c == '～' || c == '〜')) {
-                insertToChat("～")
-                return true
-            }
+        // 4. 日本語入力中の句読点・記号（確定させずにバッファに保持して、文の入力を続ける）
+        val punctuation = if (isComposing) InputCharacters.toFullWidthPunctuation(c) else null
+        if (punctuation != null) {
+            appendToCompositionOrInsert(punctuation, insertToChat)
+            return true
+        }
 
-            // 6. 外部IME（Windows IME等）から直接ひらがな・カタカナ・漢字等の確定文字が送られてきた場合
-            // ★二重入力防止ガード: Meltype 側の未確定バッファを破棄し、外部IMEの文字のみをバニラにパススルー
-            if (isJapaneseChar(c)) {
-                if (isComposing) {
-                    reset()
-                }
-                return false // Minecraftバニラ側の直接入力に任せる
-            }
+        // 5. 入力中でないときの波線記号（HYBRID では全角「～」を直接入れる）
+        if (!isComposing && InputCharacters.isTilde(c)) {
+            insertToChat("～")
+            return true
+        }
 
-            // 7. 英字以外の記号や数字が入力された場合
-            if (isComposing) {
-                commitCurrent(insertToChat)
-                insertToChat(c.toString())
-                return true
-            }
-
+        // 6. 外部IME（Windows IME等）から、ひらがな・カタカナ・漢字の確定文字が届いた場合
+        //    二重入力を防ぐため、Meltype 側の未確定バッファは捨てて、外部IMEの文字だけをバニラに任せる
+        if (InputCharacters.isJapanese(c)) {
+            if (isComposing) reset()
             return false
         }
+
+        // 7. 英字以外の記号や数字: 入力中なら、先に確定してからその文字を入れる
+        if (isComposing) {
+            commitCurrent(insertToChat)
+            insertToChat(c.toString())
+            return true
+        }
+
+        return false
     }
 
     /**
@@ -265,24 +276,9 @@ class MeltypeSession(
         }
     }
 
-    /** 入力中に打った半角の句読点・記号を、日本語の記号にする（対象外の文字は null） */
-    private fun toFullWidthPunctuation(c: Char): String? = when (c) {
-        ',' -> "、"
-        '.' -> "。"
-        '?' -> "？"
-        '!' -> "！"
-        '~', '～', '〜' -> "～"
-        else -> null
-    }
-
-    /** 外部IME確定文字判定（ひらがな、カタカナ、漢字） */
-    private fun isJapaneseChar(c: Char): Boolean {
-        val code = c.code
-        return (code in 0x3040..0x309F) || // ひらがな
-               (code in 0x30A0..0x30FF) || // カタカナ
-               (code in 0x4E00..0x9FFF) || // CJK統合漢字
-               (code in 0x3400..0x4DBF)    // CJK拡張A
-    }
+    // ---------------------------------------------------------------------------------
+    // キー入力（keyPressed）
+    // ---------------------------------------------------------------------------------
 
     /**
      * 特殊キー入力イベント（keyPressed）の処理
@@ -294,6 +290,7 @@ class MeltypeSession(
         synchronized(lock) {
             // 新しいキーが押されたら、前の Ctrl+Space の空白捨てを解除する（文字入力が届かなかったときに、次の空白を捨てないため）
             skipNextSpaceChar = false
+            skipNextDigitChar = null
 
             // モードの切り替えや記号のショートカットは、どのモード・状態でも最優先で処理する
             if (handleGlobalKeys(keyCode, scanCode, modifiers, insertToChat)) return true
@@ -313,12 +310,9 @@ class MeltypeSession(
      * 入力モードの切り替えキーと、「～」のショートカットの処理（入力中かどうかに関係なく働く）
      */
     private fun handleGlobalKeys(keyCode: Int, scanCode: Int, modifiers: Int, insertToChat: (String) -> Unit): Boolean {
-        val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
-        val ctrl = (modifiers and GLFW.GLFW_MOD_CONTROL) != 0
-
         return when {
             // Shift + F12 による「～」記号の入力
-            shift && keyCode == GLFW.GLFW_KEY_F12 -> {
+            KeyClassifier.hasShift(modifiers) && keyCode == GLFW.GLFW_KEY_F12 -> {
                 appendToCompositionOrInsert("～", insertToChat)
                 true
             }
@@ -331,29 +325,22 @@ class MeltypeSession(
             }
 
             // 半角/全角キー（Shift 等の修飾キーが押されていない単独キー押下時のみ）
-            noModifiers(modifiers) && isHankakuZenkakuKey(keyCode, scanCode) -> {
+            KeyClassifier.hasNoModifiers(modifiers) && KeyClassifier.isHankakuZenkaku(keyCode, scanCode) -> {
                 skipNextGraveChar = true
                 toggleInputMode(insertToChat)
                 true
             }
 
-            // Ctrl + Space
-            ctrl && keyCode == GLFW.GLFW_KEY_SPACE -> {
-                // Ctrl+Space では、続けて空白の文字入力が届くので、それを捨てる
+            // Ctrl + Space（続けて空白の文字入力が届くので、それを捨てる）
+            KeyClassifier.hasCtrl(modifiers) && keyCode == GLFW.GLFW_KEY_SPACE -> {
                 skipNextSpaceChar = true
                 toggleInputMode(insertToChat)
                 true
             }
 
-            // 変換キー -> HYBRIDモード
-            isHenkanKey(scanCode) -> {
-                setInputMode(InputMode.HYBRID, insertToChat)
-                true
-            }
-
-            // 無変換キー: 入力中は「ひらがな -> カタカナ -> 最初に入力した英字」を順に切り替え、入力中でなければ DIRECT モード
-            isMuhenkanKey(scanCode) -> {
-                if (isComposing) toggleMuhenkanCandidates() else setInputMode(InputMode.DIRECT, insertToChat)
+            // 変換キー: 入力モードの切り替え（押すたびに あ/A ⇔ A）
+            KeyClassifier.isHenkan(scanCode) -> {
+                toggleInputMode(insertToChat)
                 true
             }
 
@@ -361,15 +348,12 @@ class MeltypeSession(
         }
     }
 
-    private fun noModifiers(modifiers: Int): Boolean =
-        (modifiers and (GLFW.GLFW_MOD_SHIFT or GLFW.GLFW_MOD_CONTROL or GLFW.GLFW_MOD_ALT)) == 0
-
     /**
      * 入力中（バッファに文字がある）のときのキー処理
      * @return true の場合、キーを消費した
      */
     private fun handleCompositionKey(keyCode: Int, modifiers: Int, insertToChat: (String) -> Unit): Boolean {
-        val shift = (modifiers and GLFW.GLFW_MOD_SHIFT) != 0
+        val shift = KeyClassifier.hasShift(modifiers)
 
         return when (keyCode) {
             GLFW.GLFW_KEY_SPACE -> onSpaceKey(shift, insertToChat)
@@ -382,14 +366,7 @@ class MeltypeSession(
             GLFW.GLFW_KEY_TAB -> onTabKey(shift)
             GLFW.GLFW_KEY_RIGHT -> if (shift) { expandClause(); true } else moveSelection(1)
             GLFW.GLFW_KEY_LEFT -> if (shift) { shrinkClause(); true } else moveSelection(-1)
-            GLFW.GLFW_KEY_DOWN -> {
-                if (!hasCandidates) {
-                    triggerConversion()
-                    true
-                } else {
-                    moveSelection(1)
-                }
-            }
+            GLFW.GLFW_KEY_DOWN -> onDownKey()
             GLFW.GLFW_KEY_UP -> moveSelection(-1)
 
             // 1〜9の数字キー (メインキー & テンキー): 候補のダイレクト選択
@@ -398,14 +375,15 @@ class MeltypeSession(
             in GLFW.GLFW_KEY_KP_1..GLFW.GLFW_KEY_KP_9 ->
                 hasCandidates && selectCandidateByIndex(keyCode - GLFW.GLFW_KEY_KP_1, insertToChat)
 
-            // F6〜F10: 最初に入力した文字そのままの形式変換
-            GLFW.GLFW_KEY_F6, GLFW.GLFW_KEY_F7, GLFW.GLFW_KEY_F9, GLFW.GLFW_KEY_F10 -> {
-                applyFunctionKeyConversion(keyCode)
-                true
-            }
-
-            else -> false
+            else -> onOtherKey(keyCode)
         }
+    }
+
+    /** どれにも当てはまらないキー。F6〜F10 なら形式変換して消費、それ以外はバニラに任せる */
+    private fun onOtherKey(keyCode: Int): Boolean {
+        if (!functionKeyFormatter.isFormatKey(keyCode)) return false
+        applyDirectCandidate(functionKeyFormatter.format(keyCode, rawBuffer.toString()))
+        return true
     }
 
     /**
@@ -484,40 +462,18 @@ class MeltypeSession(
         return true
     }
 
-    /** F6〜F10: ひらがな / カタカナ / 全角英数 / 半角英数（最初に入力した文字そのまま）の候補を最上位にする */
-    private fun applyFunctionKeyConversion(keyCode: Int) {
-        val raw = rawBuffer.toString()
-        val kana = romajiDetector.toKanaFinal(raw)
-        applyDirectCandidate(
-            when (keyCode) {
-                GLFW.GLFW_KEY_F6 -> kana                                 // ひらがな
-                GLFW.GLFW_KEY_F7 -> romajiDetector.toKatakana(kana)      // カタカナ
-                GLFW.GLFW_KEY_F9 -> romajiDetector.toZenkakuAlpha(raw)   // 全角英数
-                else -> raw                                              // F10: 半角英数そのまま
-            }
-        )
-    }
-
-    /**
-     * 無変換トグル（ひらがな -> カタカナ -> 最初に入力した半角英字）
-     */
-    private fun toggleMuhenkanCandidates() {
-        if (!isComposing) return
-        val raw = rawBuffer.toString()
-        val kana = romajiDetector.toKanaFinal(raw)
-        val kata = romajiDetector.toKatakana(kana)
-        val modes = listOf(kana, kata, raw).distinct()
-
-        conversionGeneration++
-        val curSelected = candidates.getOrNull(selectedCandidateIndex)
-        val nextIdx = if (curSelected != null && modes.contains(curSelected)) {
-            (modes.indexOf(curSelected) + 1) % modes.size
-        } else {
-            0
+    /** ↓: 候補が出ていなければ変換を始め、出ていれば次の候補へ */
+    private fun onDownKey(): Boolean {
+        if (!hasCandidates) {
+            triggerConversion()
+            return true
         }
-        candidates = modes
-        selectedCandidateIndex = nextIdx
+        return moveSelection(1)
     }
+
+    // ---------------------------------------------------------------------------------
+    // 候補の選択
+    // ---------------------------------------------------------------------------------
 
     /**
      * 候補の選択位置を step 分だけ動かす（端では反対側へ循環）
@@ -529,6 +485,17 @@ class MeltypeSession(
         selectedCandidateIndex = Math.floorMod(selectedCandidateIndex + step, count)
         updatePreviewForCurrentCandidate()
         return true
+    }
+
+    private fun selectCandidateByIndex(index: Int, insertToChat: (String) -> Unit): Boolean {
+        if (hasCandidates && index in candidates.indices) {
+            selectedCandidateIndex = index
+            commitCurrent(insertToChat)
+            // このキーの数字が、続けて文字としても届くので、その1回を捨てる（commitCurrent の reset の後に記憶する）
+            skipNextDigitChar = '1' + index
+            return true
+        }
+        return false
     }
 
     /**
@@ -545,14 +512,9 @@ class MeltypeSession(
         selectedCandidateIndex = 0
     }
 
-    private fun selectCandidateByIndex(index: Int, insertToChat: (String) -> Unit): Boolean {
-        if (hasCandidates && index in candidates.indices) {
-            selectedCandidateIndex = index
-            commitCurrent(insertToChat)
-            return true
-        }
-        return false
-    }
+    // ---------------------------------------------------------------------------------
+    // プレビューと文節の伸縮
+    // ---------------------------------------------------------------------------------
 
     /**
      * 入力プレビューの更新
@@ -608,31 +570,20 @@ class MeltypeSession(
         activeRaw = activeRawPart
         val generation = ++conversionGeneration
 
-        val katakana = romajiDetector.toKatakana(activeKana)
-        val list = mutableListOf<String>()
-        val learned = learningStore.getLearnedCandidates(activeKana)
-        list.addAll(learned)
-        list.addIfMissing(activeKana)
-        if (katakana.isNotEmpty() && katakana != activeKana) list.addIfMissing(katakana)
-        list.addIfMissing(activeRawPart)
-
-        candidates = list.distinct().toMutableList()
+        // まず、学習済みの候補とかな・カタカナ・原文だけを、すぐに表示する
+        candidates = clauseCandidates(learningStore.getLearnedCandidates(activeKana), activeKana, activeRawPart)
+            .distinct()
         selectedCandidateIndex = 0
+        previewKana = previewFormatter.formatClausePreview(candidates.firstOrNull() ?: activeKana, remainderRawPart)
 
-        val currentSelected = candidates.firstOrNull() ?: activeKana
-        previewKana = previewFormatter.formatClausePreview(currentSelected, remainderRawPart)
-
+        // 変換結果が届いたら、候補を差し替える（その間に入力が変わっていたら捨てる）
         converter.convertAsync(activeKana).thenAccept { resultList ->
             synchronized(lock) {
                 if (generation == conversionGeneration &&
                     rawBuffer.length >= clauseManager.clauseLength && clauseManager.clauseLength > 0
                 ) {
                     val ranked = learningStore.rankCandidates(activeKana, resultList)
-                    val fullList = mutableListOf<String>()
-                    fullList.addAll(ranked)
-                    fullList.addIfMissing(activeKana)
-                    if (katakana.isNotEmpty() && katakana != activeKana) fullList.addIfMissing(katakana)
-                    fullList.addIfMissing(activeRawPart)
+                    val fullList = clauseCandidates(ranked, activeKana, activeRawPart)
 
                     candidates = CandidateFinalizer.finalize(fullList, activeRawPart, activeKana)
                     if (selectedCandidateIndex !in candidates.indices) {
@@ -643,6 +594,17 @@ class MeltypeSession(
                 }
             }
         }.exceptionally { null }
+    }
+
+    /** 文節の候補リスト: [base] のあとに、かな・カタカナ・原文（入力した英字）を、まだなければ足す */
+    private fun clauseCandidates(base: List<String>, kana: String, raw: String): MutableList<String> {
+        val katakana = romajiDetector.toKatakana(kana)
+        val list = mutableListOf<String>()
+        list.addAll(base)
+        list.addIfMissing(kana)
+        if (katakana.isNotEmpty() && katakana != kana) list.addIfMissing(katakana)
+        list.addIfMissing(raw)
+        return list
     }
 
     /**
@@ -656,6 +618,10 @@ class MeltypeSession(
             previewKana = previewFormatter.formatClausePreview(selected, remainderRawPart)
         }
     }
+
+    // ---------------------------------------------------------------------------------
+    // 変換の実行
+    // ---------------------------------------------------------------------------------
 
     /**
      * 変換リクエストの送信
@@ -688,87 +654,70 @@ class MeltypeSession(
             null
         }
     }
+
+    // ---------------------------------------------------------------------------------
+    // 確定とリセット
+    // ---------------------------------------------------------------------------------
+
     /** 現在選択中の候補（またはプレビュー文字列）を確定してチャット欄に挿入 */
     fun commitCurrent(insertToChat: (String) -> Unit) {
         synchronized(lock) {
             val hadCandidates = hasCandidates
-            val currentReading = activeReading
-            val currentRaw = activeRaw
+            val reading = activeReading
+            val raw = activeRaw
 
             // 文節伸縮による部分確定かどうか
             val isPartialClause = clauseManager.isPartial(rawBuffer.length)
             val remainderRaw = if (isPartialClause) clauseManager.split(rawBuffer.toString()).second else ""
 
-            val committedText = when {
-                hasCandidates -> candidates.getOrNull(selectedCandidateIndex) ?: candidates.firstOrNull() ?: previewKana
-                previewKana.isNotEmpty() -> {
-                    val rawStr = rawBuffer.toString()
-                    val multiCompound = compoundWordSplitter.splitSentence(rawStr)
-                    if (multiCompound != null) {
-                        multiCompound.noSpaceText
-                    } else {
-                        val compound = compoundWordSplitter.split(rawStr)
-                        if (compound != null) {
-                            "${compound.english}${compound.japaneseKana}"
-                        } else {
-                            if (scoreEngine.isEnglishInput(rawStr)) {
-                                rawStr
-                            } else {
-                                // 変換せずに Enter で確定するときも、語尾の n は「ん」にする
-                                previewKana.withFinalN()
-                            }
-                        }
-                    }
-                }
-                else -> rawBuffer.toString()
-            }
-
+            val committedText = textToCommit()
             if (committedText.isNotEmpty()) {
-                // ★変換学習: 候補ウィンドウから選択・確定した場合に学習
-                if (hadCandidates && currentReading.isNotEmpty()) {
-                    learningStore.recordSelection(currentReading, committedText)
-                    if (currentRaw.isNotEmpty() && currentRaw != currentReading) {
-                        learningStore.recordSelection(currentRaw, committedText)
-                    }
-                    val compound = compoundWordSplitter.split(currentRaw)
-                    if (compound != null && committedText.startsWith(compound.english)) {
-                        val jpPart = committedText.removePrefix(compound.english)
-                        if (jpPart.isNotEmpty()) {
-                            learningStore.recordSelection(compound.japaneseKana, jpPart)
-                        }
-                    }
-                }
-
-                try {
-                    insertToChat(committedText)
-                } catch (_: Throwable) {
-                }
+                // 候補ウィンドウから選択・確定した場合は、変換を学習する
+                if (hadCandidates) commitTextResolver.recordSelection(reading, raw, committedText)
+                insertSafely(insertToChat, committedText)
             }
 
             if (isPartialClause && remainderRaw.isNotEmpty()) {
-                // 文節伸縮で確定された残りの文字列を次のバッファとして引き継ぐ
-                rawBuffer.clear()
-                rawBuffer.append(remainderRaw)
-                clauseManager.reset()
-                candidates = emptyList()
-                selectedCandidateIndex = 0
-                updatePreview()
+                carryOverRemainder(remainderRaw)
             } else {
                 reset()
             }
         }
     }
 
+    /** 確定する文字: 候補が出ていれば選択中の候補、なければ変換せずに確定するときの文字 */
+    private fun textToCommit(): String =
+        if (hasCandidates) {
+            candidates.getOrNull(selectedCandidateIndex) ?: candidates.firstOrNull() ?: previewKana
+        } else {
+            commitTextResolver.resolveWithoutCandidates(rawBuffer.toString(), previewKana)
+        }
+
+    /** 文節伸縮で確定された残りの文字列を、次のバッファとして引き継ぐ */
+    private fun carryOverRemainder(remainderRaw: String) {
+        rawBuffer.clear()
+        rawBuffer.append(remainderRaw)
+        clauseManager.reset()
+        candidates = emptyList()
+        selectedCandidateIndex = 0
+        updatePreview()
+    }
+
     /** 生のアルファベットのまま確定して流し込む */
     private fun flushAsIs(insertToChat: (String) -> Unit) {
         synchronized(lock) {
             if (rawBuffer.isNotEmpty()) {
-                try {
-                    insertToChat(rawBuffer.toString())
-                } catch (_: Throwable) {
-                }
+                insertSafely(insertToChat, rawBuffer.toString())
             }
             reset()
+        }
+    }
+
+    /** チャット欄などへの挿入で例外が出ても、MOD の処理は止めない */
+    private fun insertSafely(insertToChat: (String) -> Unit, text: String) {
+        try {
+            insertToChat(text)
+        } catch (_: Throwable) {
         }
     }
 

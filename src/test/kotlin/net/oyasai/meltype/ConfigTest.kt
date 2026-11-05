@@ -72,6 +72,11 @@ class ConfigTest : MeltypeTestBase() {
         assertFalse(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_ENTER, 0))
         assertFalse(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_LEFT_SHIFT, 0))
         assertTrue(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_F8, 0))
+        // F12（修飾キーなし）は設定画面を開くキーなので、切り替えには登録できない
+        assertFalse(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_F12, 0))
+        assertTrue(MeltypeConfig.isOpenSettingsKey(GLFW.GLFW_KEY_F12, 0))
+        assertFalse(MeltypeConfig.isOpenSettingsKey(GLFW.GLFW_KEY_F12, GLFW.GLFW_MOD_SHIFT)) // Shift+F12 は「～」
+        assertTrue(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_F12, GLFW.GLFW_MOD_CONTROL))
         assertTrue(MeltypeConfig.isAllowedToggleKey(GLFW.GLFW_KEY_J, GLFW.GLFW_MOD_CONTROL))
 
         val oldCode = MeltypeConfig.toggleKeyCode
