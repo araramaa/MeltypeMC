@@ -45,7 +45,6 @@ class MeltypeConfigScreen(
 
         /** 案内の文字の色 */
         private const val HINT_COLOR = 0xFFAAAAAA.toInt()
-        private const val FOOTER_COLOR = 0xFF888888.toInt()
     }
 
     override fun init() {
@@ -261,10 +260,10 @@ class MeltypeConfigScreen(
         val imeHintWidth = font.width(imeHint)
         extractor.textRenderer().accept((width - imeHintWidth) / 2, keyHintY + 12, imeHint)
 
-        // 画面下部ヒント
-        val hint = Component.literal("※ チャット欄の [あ/A] アイコンを右クリックでいつでも開けます").withColor(FOOTER_COLOR)
+        // 設定画面の開き方の案内（上の2行のすぐ下）
+        val hint = Component.literal("※ チャット欄の [あ/A] アイコンを右クリックでいつでも開けます").withColor(HINT_COLOR)
         val hintWidth = font.width(hint)
-        extractor.textRenderer().accept((width - hintWidth) / 2, height - 20, hint)
+        extractor.textRenderer().accept((width - hintWidth) / 2, keyHintY + 24, hint)
     }
 
     override fun onClose() {
