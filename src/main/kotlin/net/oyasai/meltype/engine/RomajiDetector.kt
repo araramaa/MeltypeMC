@@ -21,96 +21,64 @@ data class RomajiAnalysis(
 /**
  * Meltype.Core の RomajiDetector を忠実に Kotlin に移植したクラス
  * ローマ字トークンの解析、かな変換、未完了子音（partial）の追跡を行います。
+ *
+ * ローマ字とかなの対応表は [RomajiTable] にある。
  */
 class RomajiDetector {
 
     companion object {
         private val Vowels = setOf('a', 'i', 'u', 'e', 'o')
-        private fun isVowel(c: Char): Boolean = c in Vowels
         private fun isConsonant(c: Char): Boolean = c in 'a'..'z' && c !in Vowels
 
+        /** ローマ字として扱う文字（英字とハイフン）か */
+        private fun isRomajiChar(c: Char): Boolean = c in 'a'..'z' || c == '-'
+
         private val StrongYouonKana = setOf("ゃ", "ゅ", "ょ", "ぁ", "ぃ", "ぅ", "ぇ", "ぉ", "ゎ")
-
-        // ローマ字 -> かな変換テーブル
-        private val RomajiTable = mapOf(
-            // 母音
-            "a" to "あ", "i" to "い", "u" to "う", "e" to "え", "o" to "お",
-            // か行
-            "ka" to "か", "ki" to "き", "ku" to "く", "ke" to "け", "ko" to "こ",
-            "ga" to "が", "gi" to "ぎ", "gu" to "ぐ", "ge" to "げ", "go" to "ご",
-            "kya" to "きゃ", "kyu" to "きゅ", "kyo" to "きょ",
-            "gya" to "ぎゃ", "gyu" to "ぎゅ", "gyo" to "ぎょ",
-            // さ行
-            "sa" to "さ", "si" to "し", "shi" to "し", "su" to "す", "se" to "せ", "so" to "そ",
-            "za" to "ざ", "zi" to "じ", "ji" to "じ", "zu" to "ず", "ze" to "ぜ", "zo" to "ぞ",
-            "sha" to "しゃ", "shu" to "しゅ", "she" to "しぇ", "sho" to "しょ",
-            "sya" to "しゃ", "syu" to "しゅ", "sye" to "しぇ", "syo" to "しょ",
-            "ja" to "じゃ", "ju" to "じゅ", "je" to "じぇ", "jo" to "じょ",
-            "jya" to "じゃ", "jyu" to "じゅ", "jye" to "じぇ", "jyo" to "じょ",
-            // た行
-            "ta" to "た", "ti" to "ち", "chi" to "ち", "tu" to "つ", "tsu" to "つ", "te" to "て", "to" to "と",
-            "da" to "だ", "di" to "ぢ", "du" to "づ", "de" to "で", "do" to "ど",
-            "cha" to "ちゃ", "chu" to "ちゅ", "che" to "ちぇ", "cho" to "ちょ",
-            "tya" to "ちゃ", "tyu" to "ちゅ", "tye" to "ちぇ", "tyo" to "ちょ",
-            "dya" to "ぢゃ", "dyu" to "ぢゅ", "dye" to "ぢぇ", "dyo" to "ぢょ",
-            // な行
-            "na" to "な", "ni" to "に", "nu" to "ぬ", "ne" to "ね", "no" to "の",
-            "nya" to "にゃ", "nyu" to "にゅ", "nyo" to "にょ",
-            // は行
-            "ha" to "は", "hi" to "ひ", "hu" to "ふ", "fu" to "ふ", "he" to "へ", "ho" to "ほ",
-            "ba" to "ば", "bi" to "び", "bu" to "ぶ", "be" to "べ", "bo" to "ぼ",
-            "pa" to "ぱ", "pi" to "ぴ", "pu" to "ぷ", "pe" to "ぺ", "po" to "ぽ",
-            "hya" to "ひゃ", "hyu" to "ひゅ", "hyo" to "ひょ",
-            "bya" to "びゃ", "byu" to "びゅ", "byo" to "びょ",
-            "pya" to "ぴゃ", "pyu" to "ぴゅ", "pyo" to "ぴょ",
-            "fa" to "ふぁ", "fi" to "ふぃ", "fe" to "ふぇ", "fo" to "ふぉ", "fyu" to "ふゅ",
-            // ま行
-            "ma" to "ま", "mi" to "み", "mu" to "む", "me" to "め", "mo" to "も",
-            "mya" to "みゃ", "myu" to "みゅ", "myo" to "みょ",
-            // や行
-            "ya" to "や", "yu" to "ゆ", "yo" to "よ",
-            // ら行
-            "ra" to "ら", "ri" to "り", "ru" to "る", "re" to "れ", "ro" to "ろ",
-            "rya" to "りゃ", "ryu" to "りゅ", "ryo" to "りょ",
-            // わ行
-            "wa" to "わ", "wo" to "を", "nn" to "ん",
-            "wi" to "うぃ", "wu" to "う", // "we" は英単語 we と衝突するため登録しない（whe で入力）
-            "wha" to "うぁ", "whi" to "うぃ", "whu" to "う", "whe" to "うぇ", "who" to "うぉ",
-            // や行・拗音の追加（MS-IME 等と同じ打ち方）
-            "ye" to "いぇ",
-            "zya" to "じゃ", "zyu" to "じゅ", "zye" to "じぇ", "zyo" to "じょ",
-            "cya" to "ちゃ", "cyu" to "ちゅ", "cye" to "ちぇ", "cyo" to "ちょ",
-            "tsa" to "つぁ", "tsi" to "つぃ", "tse" to "つぇ", "tso" to "つぉ",
-            "tha" to "てゃ", "thu" to "てゅ", "the" to "てぇ", "tho" to "てょ",
-            "dha" to "でゃ", "dhu" to "でゅ", "dhe" to "でぇ", "dho" to "でょ",
-            "kwa" to "くぁ", "kwi" to "くぃ", "kwu" to "く", "kwe" to "くぇ", "kwo" to "くぉ",
-            "gwa" to "ぐぁ", "gwi" to "ぐぃ", "gwu" to "ぐ", "gwe" to "ぐぇ", "gwo" to "ぐぉ",
-            // 促音・小文字
-            "la" to "ぁ", "li" to "ぃ", "lu" to "ぅ", "le" to "ぇ", "lo" to "ぉ",
-            "xa" to "ぁ", "xi" to "ぃ", "xu" to "ぅ", "xe" to "ぇ", "xo" to "ぉ",
-            "xtu" to "っ", "ltu" to "っ", "xtsu" to "っ", "ltsu" to "っ",
-            "xya" to "ゃ", "xyu" to "ゅ", "xyo" to "ょ",
-            "lya" to "ゃ", "lyu" to "ゅ", "lyo" to "ょ",
-            // 外来音
-            "va" to "ヴぁ", "vi" to "ヴぃ", "vu" to "ヴ", "ve" to "ヴぇ", "vo" to "ヴぉ",
-            "thi" to "てぃ", "dhi" to "でぃ",
-            "-" to "ー"
-        )
-
-        // プレフィックスとなりうる部分文字列の集合
-        private val PartialPrefixes: Set<String> = buildSet {
-            for (key in RomajiTable.keys) {
-                for (len in 1 until key.length) {
-                    add(key.substring(0, len))
-                }
-            }
-        }
 
         fun readCRow(input: String): String {
             // ca -> ka, cu -> ku, co -> ko の置換
             return input.replace("ca", "ka").replace("cu", "ku").replace("co", "ko")
         }
     }
+
+    // ---------------------------------------------------------------------------------
+    // 文字列を先頭から読むときの、共通の判定（analyze と toKanaLenient の両方が使う）
+    // ---------------------------------------------------------------------------------
+
+    /**
+     * 位置 [i] の `n` が、撥音「ん」になるか。なるときは、使う文字数を返す（ならないときは 0）。
+     * "nn" なら 2 文字、`n` の次が子音（y 以外）なら 1 文字。
+     */
+    private fun hatsuonLength(s: String, i: Int): Int {
+        if (s[i] != 'n' || i + 1 >= s.length) return 0
+        val next = s[i + 1]
+        return when {
+            next == 'n' -> 2
+            isConsonant(next) && next != 'y' -> 1
+            else -> 0
+        }
+    }
+
+    /** 位置 [i] の文字が、促音「っ」になるか（同じ子音の連続 kk・tt・ss など、または tch） */
+    private fun isSokuon(s: String, i: Int): Boolean {
+        val c = s[i]
+        if (i + 1 >= s.length || !isConsonant(c) || c == 'n') return false
+        val next = s[i + 1]
+        return next == c || (c == 't' && next == 'c' && i + 2 < s.length && s[i + 2] == 'h')
+    }
+
+    /** 位置 [i] から、表にあるローマ字のうち、一番長く一致するもの（4文字〜1文字）。なければ null */
+    private fun longestMatch(s: String, i: Int): String? {
+        for (len in minOf(RomajiTable.MAX_ROMAJI_LENGTH, s.length - i) downTo 1) {
+            val piece = s.substring(i, i + len)
+            if (RomajiTable.contains(piece)) return piece
+        }
+        return null
+    }
+
+    // ---------------------------------------------------------------------------------
+    // 解析
+    // ---------------------------------------------------------------------------------
 
     /**
      * ローマ字文字列を解析し、トークン列と状態を返します
@@ -124,10 +92,10 @@ class RomajiDetector {
         var i = 0
         val s = letters.lowercase()
 
-        fun invalid(reason: String) = RomajiAnalysis(
-            isValid = false,
+        fun result(isValid: Boolean, partial: String, reason: String?) = RomajiAnalysis(
+            isValid = isValid,
             tokens = tokens,
-            partial = "",
+            partial = partial,
             invalidReason = reason,
             strongYouon = strongYouon,
             tsu = tsu,
@@ -137,82 +105,50 @@ class RomajiDetector {
 
         while (i < s.length) {
             val c = s[i]
-            if (c !in 'a'..'z' && c != '-') {
+            if (!isRomajiChar(c)) {
                 // 空白や句読点・記号はそのままトークンとして保持し、文全体の解析を継続
                 tokens.add(RomajiToken(c.toString(), c.toString()))
                 i += 1
                 continue
             }
 
-            // 撥音 'n' の判定: "nn" または 次が子音（y以外）の場合
-            if (c == 'n' && i + 1 < s.length && (s[i + 1] == 'n' || (isConsonant(s[i + 1]) && s[i + 1] != 'y'))) {
-                val consumed = if (s[i + 1] == 'n') 2 else 1
-                tokens.add(RomajiToken(s.substring(i, i + consumed), "ん"))
-                i += consumed
+            val hatsuon = hatsuonLength(s, i)
+            if (hatsuon > 0) {
+                tokens.add(RomajiToken(s.substring(i, i + hatsuon), "ん"))
+                i += hatsuon
                 continue
             }
 
-            // 促音の判定: 子音の連続 (kk, tt, ss など) または tch
-            if (i + 1 < s.length && isConsonant(c) && c != 'n' &&
-                (s[i + 1] == c || (c == 't' && s[i + 1] == 'c' && i + 2 < s.length && s[i + 2] == 'h'))
-            ) {
+            if (isSokuon(s, i)) {
                 tokens.add(RomajiToken(c.toString(), "っ"))
                 sokuon++
                 i += 1
                 continue
             }
 
-            // 最長一致検索 (4文字〜1文字)
-            var matched = false
-            val maxLen = minOf(4, s.length - i)
-            for (len in maxLen downTo 1) {
-                val piece = s.substring(i, i + len)
-                val kana = RomajiTable[piece]
-                if (kana != null) {
-                    if (StrongYouonKana.any { kana.contains(it) }) strongYouon++
-                    if (piece == "tsu") tsu++
-                    if (kana == "う" && tokens.isNotEmpty() && tokens.last().romaji.endsWith("o")) longVowels++
+            val piece = longestMatch(s, i)
+            if (piece != null) {
+                val kana = RomajiTable.entries.getValue(piece)
+                if (StrongYouonKana.any { kana.contains(it) }) strongYouon++
+                if (piece == "tsu") tsu++
+                if (kana == "う" && tokens.isNotEmpty() && tokens.last().romaji.endsWith("o")) longVowels++
 
-                    tokens.add(RomajiToken(piece, kana))
-                    i += len
-                    matched = true
-                    break
-                }
+                tokens.add(RomajiToken(piece, kana))
+                i += piece.length
+                continue
             }
 
-            if (matched) continue
-
-            // テーブルに直接マッチしなかった場合、未確定子音（入力途中）か確認
+            // 表に直接マッチしなかった場合、未確定子音（入力途中）か確認
             val rest = s.substring(i)
-            if (PartialPrefixes.contains(rest) || rest == "n" || rest == "tc") {
-                return RomajiAnalysis(
-                    isValid = true,
-                    tokens = tokens,
-                    partial = rest,
-                    strongYouon = strongYouon,
-                    tsu = tsu,
-                    sokuon = sokuon,
-                    longVowels = longVowels
-                )
-            }
+            if (RomajiTable.isPartial(rest)) return result(true, rest, null)
 
-            return invalid("ローマ字として無効な並び: '$rest'")
+            return result(false, "", "ローマ字として無効な並び: '$rest'")
         }
 
-        val hasKanaTokens = tokens.any { RomajiTable.containsKey(it.romaji) || it.kana == "ん" || it.kana == "っ" }
-        if (!hasKanaTokens) {
-            return invalid("ローマ字トークンなし")
-        }
+        val hasKanaTokens = tokens.any { RomajiTable.contains(it.romaji) || it.kana == "ん" || it.kana == "っ" }
+        if (!hasKanaTokens) return result(false, "", "ローマ字トークンなし")
 
-        return RomajiAnalysis(
-            isValid = true,
-            tokens = tokens,
-            partial = "",
-            strongYouon = strongYouon,
-            tsu = tsu,
-            sokuon = sokuon,
-            longVowels = longVowels
-        )
+        return result(true, "", null)
     }
 
     /**
@@ -230,52 +166,40 @@ class RomajiDetector {
             val c = s[i]
 
             // 英字以外・ハイフン以外はそのまま
-            if (c !in 'a'..'z' && c != '-') {
+            if (!isRomajiChar(c)) {
                 sb.append(c)
                 i += 1
                 continue
             }
 
-            // 撥音 'n' の判定: "nn" または 次が子音（y以外）の場合
-            if (c == 'n' && i + 1 < s.length && (s[i + 1] == 'n' || (isConsonant(s[i + 1]) && s[i + 1] != 'y'))) {
-                val consumed = if (s[i + 1] == 'n') 2 else 1
+            val hatsuon = hatsuonLength(s, i)
+            if (hatsuon > 0) {
                 sb.append("ん")
-                i += consumed
+                i += hatsuon
                 continue
             }
 
-            // 促音の判定: 子音の連続 (kk, tt, ss など) または tch
-            if (i + 1 < s.length && isConsonant(c) && c != 'n' &&
-                (s[i + 1] == c || (c == 't' && s[i + 1] == 'c' && i + 2 < s.length && s[i + 2] == 'h'))
-            ) {
+            if (isSokuon(s, i)) {
                 sb.append("っ")
                 i += 1
                 continue
             }
 
-            // 最長一致検索 (4文字〜1文字)
-            var matched = false
-            val maxLen = minOf(4, s.length - i)
-            for (len in maxLen downTo 1) {
-                val piece = s.substring(i, i + len)
-                val kana = RomajiTable[piece]
-                if (kana != null) {
-                    sb.append(kana)
-                    i += len
-                    matched = true
-                    break
-                }
+            val piece = longestMatch(s, i)
+            if (piece != null) {
+                sb.append(RomajiTable.kanaFor(piece))
+                i += piece.length
+                continue
             }
-            if (matched) continue
 
             // 末尾がプレフィックス（入力途中子音）ならそのまま追加して完了
             val rest = s.substring(i)
-            if (PartialPrefixes.contains(rest) || rest == "n" || rest == "tc") {
+            if (RomajiTable.isPartial(rest)) {
                 sb.append(rest)
                 break
             }
 
-            // テーブルにマッチせず、かつプレフィックスでもない孤立子音・不正文字はそのまま出力し、次へ進む！
+            // テーブルにマッチせず、かつプレフィックスでもない孤立子音・不正文字はそのまま出力し、次へ進む
             sb.append(c)
             i += 1
         }
@@ -294,7 +218,7 @@ class RomajiDetector {
      */
     fun toKatakana(hiragana: String): String {
         return hiragana.map { c ->
-            if (c in '\u3041'..'\u3096') c + 0x60 else c
+            if (c in 'ぁ'..'ゖ') c + 0x60 else c
         }.joinToString("")
     }
 

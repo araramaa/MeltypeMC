@@ -27,11 +27,29 @@ object CompositionRenderer {
     private const val CANDIDATE_BOX_HEIGHT = 14
     private const val TOOLTIP_HEIGHT = 14
 
+    /** チャット入力欄の高さと、画面の端からの余白 */
+    private const val CHAT_INPUT_HEIGHT = 14
+    private const val CHAT_INPUT_MARGIN = 2
+
+    /** チャット以外の画面で、候補を出す位置（画面の下端からの距離） */
+    private const val NON_CHAT_BOTTOM_OFFSET = 26
+
+    /** 他のMODの部品を探す範囲（入力欄の上、画面の下端から、この距離まで） */
+    private const val OBSTACLE_SEARCH_RANGE = 50
+
+    /** 入力中のプレビューを出す位置（候補リストの上 / 入力欄の上 からの距離） */
+    private const val PREVIEW_OFFSET_ABOVE_CANDIDATES = 32
+    private const val PREVIEW_OFFSET_ABOVE_INPUT = 16
+
     // --- カラーパレット定数 ---
     private const val BG_TRANSPARENT_BLACK = 0xCC000000.toInt()
     private const val HIGHLIGHT_BLUE = 0x88336699.toInt()
     private const val COLOR_WHITE = 0xFFFFFFFF.toInt()
     private const val COLOR_ACCENT_ORANGE = 0xFFFFAA00.toInt()
+
+    // ツールチップ
+    private const val COLOR_TOOLTIP_BG = 0xF0101015.toInt()
+    private const val COLOR_TOOLTIP_TEXT = 0xFFE0E0E0.toInt()
 
     // DIRECTモード（半角英数）ボタンスタイル
     private const val COLOR_DIRECT_BORDER = 0xFF5A6978.toInt()
@@ -67,8 +85,8 @@ object CompositionRenderer {
                 cachedChatInputField = field
             }
             val editBox = field?.get(screen) as? EditBox ?: return
-            val targetX = 2 + IndicatorLayout.BUTTON_WIDTH + 2
-            val targetWidth = screen.width - targetX - 2
+            val targetX = CHAT_INPUT_MARGIN + IndicatorLayout.BUTTON_WIDTH + CHAT_INPUT_MARGIN
+            val targetWidth = screen.width - targetX - CHAT_INPUT_MARGIN
             if (editBox.x != targetX || editBox.width != targetWidth) {
                 editBox.x = targetX
                 editBox.width = targetWidth
@@ -86,16 +104,16 @@ object CompositionRenderer {
         val screenHeight = screen.height
         val className = screen.javaClass.name
         if (screen !is ChatScreen && !className.contains("Chat")) {
-            return screenHeight - 26
+            return screenHeight - NON_CHAT_BOTTOM_OFFSET
         }
 
-        var highestObstacleY = screenHeight - 14
+        var highestObstacleY = screenHeight - CHAT_INPUT_HEIGHT
         try {
             for (child in screen.children()) {
                 if (child is AbstractWidget && child.visible) {
                     val cy = child.y
-                    // 入力欄の真上（下から50px以内）にある障害物ウィジェットを検出
-                    if (cy in (screenHeight - 50) until highestObstacleY) {
+                    // 入力欄の真上（下から OBSTACLE_SEARCH_RANGE px以内）にある障害物ウィジェットを検出
+                    if (cy in (screenHeight - OBSTACLE_SEARCH_RANGE) until highestObstacleY) {
                         highestObstacleY = minOf(highestObstacleY, cy)
                     }
                 }
@@ -192,9 +210,9 @@ object CompositionRenderer {
             val ttX = btnX.coerceAtMost(screen.width - ttW - 4)
             val ttY = (btnY - TOOLTIP_HEIGHT - 2).coerceAtLeast(2)
 
-            extractor.fill(ttX, ttY, ttX + ttW, ttY + TOOLTIP_HEIGHT, 0xF0101015.toInt())
+            extractor.fill(ttX, ttY, ttX + ttW, ttY + TOOLTIP_HEIGHT, COLOR_TOOLTIP_BG)
             extractor.fill(ttX, ttY, ttX + ttW, ttY + 1, borderColor)
-            extractor.textRenderer().accept(ttX + 4, ttY + 3, Component.literal(tooltipText).withColor(0xFFE0E0E0.toInt()))
+            extractor.textRenderer().accept(ttX + 4, ttY + 3, Component.literal(tooltipText).withColor(COLOR_TOOLTIP_TEXT))
         }
     }
 
@@ -254,7 +272,8 @@ object CompositionRenderer {
 
         val previewText = "変換中: $preview"
         val textWidth = font.width(previewText)
-        val previewY = if (session.hasCandidates) obstacleY - 32 else obstacleY - 16
+        val previewY = obstacleY -
+            if (session.hasCandidates) PREVIEW_OFFSET_ABOVE_CANDIDATES else PREVIEW_OFFSET_ABOVE_INPUT
         val safeX = 4.coerceIn(2, maxOf(2, screenWidth - textWidth - 8))
 
         // 背景

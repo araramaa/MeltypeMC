@@ -5,6 +5,7 @@ import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents
 import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents
+import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.screens.ChatScreen
 import net.minecraft.client.gui.screens.Screen
@@ -22,6 +23,7 @@ import net.oyasai.meltype.engine.ScoreEngine
 import net.oyasai.meltype.engine.SlashCommandGate
 import net.oyasai.meltype.gui.CompositionRenderer
 import net.oyasai.meltype.gui.IndicatorLayout
+import net.oyasai.meltype.gui.MeltypeConfigScreen
 import org.slf4j.LoggerFactory
 
 /**
@@ -31,6 +33,13 @@ import org.slf4j.LoggerFactory
 object MeltypeClient : ClientModInitializer {
 
     private val logger = LoggerFactory.getLogger("MeltypeMC")
+
+    /** マウスのボタンの番号（GLFW 方式。[KeyEventCompat.mouseButton] が、版の違いをそろえる） */
+    private const val MOUSE_BUTTON_LEFT = 0
+    private const val MOUSE_BUTTON_RIGHT = 1
+
+    /** 辞書ファイルの場所 */
+    private const val ENGLISH_DICTIONARY_RESOURCE = "/dictionaries/english-words.txt"
 
     lateinit var romajiDetector: RomajiDetector
         private set
@@ -50,7 +59,7 @@ object MeltypeClient : ClientModInitializer {
 
         // 1. 各エンジンの初期化
         romajiDetector = RomajiDetector()
-        englishDetector = EnglishDetector.loadFromResource("/dictionaries/english-words.txt")
+        englishDetector = EnglishDetector.loadFromResource(ENGLISH_DICTIONARY_RESOURCE)
         scoreEngine = ScoreEngine(romajiDetector, englishDetector)
         slashCommandGate = SlashCommandGate()
 
@@ -78,6 +87,10 @@ object MeltypeClient : ClientModInitializer {
         logger.info("[MeltypeMC] Successfully initialized! Auto English/Japanese detection and '/' command mode are ready.")
     }
 
+    // ---------------------------------------------------------------------------------
+    // 画面へのハンドラの登録
+    // ---------------------------------------------------------------------------------
+
     private fun registerScreenHandlers(screen: Screen) {
         if (!isTextInputActive(screen)) return
 
@@ -90,7 +103,15 @@ object MeltypeClient : ClientModInitializer {
             session.resetForNewScreen()
         }
 
-        // 特殊キー入力（Space, Enter, Backspace, Tab, 矢印キー等）のインターセプト
+        registerKeyHandler(screen)
+        registerMouseHandler(screen)
+        registerCharHandler(screen)
+        registerRenderHandler(screen)
+        registerRemoveHandler(screen)
+    }
+
+    /** 特殊キー入力（Space, Enter, Backspace, Tab, 矢印キー等）のインターセプト */
+    private fun registerKeyHandler(screen: Screen) {
         ScreenKeyboardEvents.allowKeyPress(screen).register(ScreenKeyboardEvents.AllowKeyPress { s, keyEvent ->
             if (!isTextInputActive(s)) return@AllowKeyPress true
 
@@ -99,11 +120,13 @@ object MeltypeClient : ClientModInitializer {
                 val key = KeyEventCompat.glfwKey(keyEvent)
                 val modifiers = KeyEventCompat.glfwModifiers(keyEvent)
                 val scancode = KeyEventCompat.scancode(keyEvent)
+
                 // F12（修飾キーなし）は、設定画面を開く
                 if (MeltypeConfig.enabled && MeltypeConfig.isOpenSettingsKey(key, modifiers)) {
                     openConfigScreen(s)
                     return@AllowKeyPress false
                 }
+
                 val handled = session.onKeyPressed(key, scancode, modifiers) { commitText ->
                     insertTextToScreen(s, commitText)
                 }
@@ -114,19 +137,22 @@ object MeltypeClient : ClientModInitializer {
                 true // 例外時はバニラ通常処理に安全にフォールバック
             }
         })
+    }
 
-        // マウスクリックイベント（インジケータークリックでの入力モード切り替え / 右クリックで設定画面）
+    /** マウスクリック（アイコンの左クリックでモード切り替え / 右クリックで設定画面） */
+    private fun registerMouseHandler(screen: Screen) {
         ScreenMouseEvents.allowMouseClick(screen).register(ScreenMouseEvents.AllowMouseClick { s, mouseButtonEvent ->
             try {
                 if (IndicatorLayout.isClicked(s, mouseButtonEvent.x(), mouseButtonEvent.y())) {
-                    if (KeyEventCompat.mouseButton(mouseButtonEvent) == 0) { // 左クリック: 入力モード切替
-                        session.toggleInputMode { commitText ->
-                            insertTextToScreen(s, commitText)
+                    when (KeyEventCompat.mouseButton(mouseButtonEvent)) {
+                        MOUSE_BUTTON_LEFT -> {
+                            session.toggleInputMode { commitText -> insertTextToScreen(s, commitText) }
+                            return@AllowMouseClick false // クリックを消費
                         }
-                        return@AllowMouseClick false // クリックを消費
-                    } else if (KeyEventCompat.mouseButton(mouseButtonEvent) == 1) { // 右クリック: 設定メニューを開く
-                        openConfigScreen(s)
-                        return@AllowMouseClick false // クリックを消費
+                        MOUSE_BUTTON_RIGHT -> {
+                            openConfigScreen(s)
+                            return@AllowMouseClick false // クリックを消費
+                        }
                     }
                 }
             } catch (e: Throwable) {
@@ -134,8 +160,10 @@ object MeltypeClient : ClientModInitializer {
             }
             true
         })
+    }
 
-        // 文字入力イベント（charTyped）のインターセプト
+    /** 文字入力イベント（charTyped）のインターセプト */
+    private fun registerCharHandler(screen: Screen) {
         ScreenKeyboardEvents.allowCharType(screen).register(ScreenKeyboardEvents.AllowCharType { s, charEvent ->
             if (!isTextInputActive(s)) return@AllowCharType true
 
@@ -152,8 +180,10 @@ object MeltypeClient : ClientModInitializer {
                 true // 例外時はバニラ通常処理に安全にフォールバック
             }
         })
+    }
 
-        // 描画フェーズ（インライン候補ウィンドウ＆下線プレビュー＆モードインジケーター）
+    /** 描画フェーズ（インライン候補ウィンドウ＆下線プレビュー＆モードインジケーター） */
+    private fun registerRenderHandler(screen: Screen) {
         ScreenEvents.afterForeground(screen).register(ScreenEvents.AfterForeground { s, extractor, mouseX, mouseY, _ ->
             if (isTextInputActive(s)) {
                 try {
@@ -162,8 +192,10 @@ object MeltypeClient : ClientModInitializer {
                 }
             }
         })
+    }
 
-        // 画面を閉じた時のセッションリセット
+    /** 画面を閉じた時のセッションリセット */
+    private fun registerRemoveHandler(screen: Screen) {
         ScreenEvents.remove(screen).register(ScreenEvents.Remove { s ->
             try {
                 attachedScreens.remove(s)
@@ -174,16 +206,18 @@ object MeltypeClient : ClientModInitializer {
         })
     }
 
+    // ---------------------------------------------------------------------------------
+    // 画面まわりの補助
+    // ---------------------------------------------------------------------------------
+
+    /** Meltype の設定画面を開く（元の画面は、設定画面を閉じたときに戻る） */
+    private fun openConfigScreen(parent: Screen) {
+        Minecraft.getInstance().setScreenAndShow(MeltypeConfigScreen(parent, session.learningStore))
+    }
+
     /**
      * テキスト入力がアクティブな画面・ウィジェットであるかを安全に判定
      */
-    /** Meltype の設定画面を開く（元の画面は、設定画面を閉じたときに戻る） */
-    private fun openConfigScreen(parent: Screen) {
-        net.minecraft.client.Minecraft.getInstance().setScreenAndShow(
-            net.oyasai.meltype.gui.MeltypeConfigScreen(parent, session.learningStore)
-        )
-    }
-
     private fun isTextInputActive(screen: Screen): Boolean {
         val className = screen.javaClass.name
         if (screen is ChatScreen || screen is AnvilScreen || screen is AbstractSignEditScreen || screen is BookEditScreen) {
